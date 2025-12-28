@@ -1,0 +1,29 @@
+[MASTER]
+ignore=.git,__pycache__,.venv,venv
+jobs=1
+
+[MESSAGES CONTROL]
+disable=
+    import-error,
+    no-name-in-module,
+    no-member,
+    missing-module-docstring,
+    missing-class-docstring,
+    too-few-public-methods,
+    too-many-arguments,
+    too-many-locals,
+    too-many-branches,
+    too-many-statements
+
+[FORMAT]
+max-line-length=100
+indent-string='    '
+
+[BASIC]
+good-names=i,j,k,df,ts,e,f,_
+
+[DESIGN]
+max-args=10
+max-locals=20
+max-returns=6
+max-branches=15
