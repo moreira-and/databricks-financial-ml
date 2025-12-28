@@ -7,10 +7,13 @@ import logging
 import os
 import pandas as pd
 import requests
+import time
+
 from datetime import datetime, timedelta
 from typing import Dict, Iterable, List, Optional, Any, Union
 from pyspark.sql import DataFrame, SparkSession
-import time
+from pyspark.dbutils import DBUtils
+
 
 # Configuração do logger
 logger = logging.getLogger(__name__)
@@ -96,7 +99,8 @@ def buscar_historico_b3(
     logger.info(f"Período: {inicio} até {fim}")
     
     # Token da API
-    BRAPI_TOKEN = api_key or "bskwmkRoxVSMKPwR5HHUSE"
+    dbutils = DBUtils(spark)
+    BRAPI_TOKEN = dbutils.secrets.get("brapi_scope", "BRAPI_TOKEN")
     BASE_URL = "https://brapi.dev/api/quote"
     
     # Valida datas
