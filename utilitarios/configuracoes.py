@@ -68,34 +68,34 @@ DEFINICAO_TABELAS = {
             "nome_fisico": "series_bacen",
             "colunas_esperadas": ["data", "valor", "serie"],
         },
-        # NOVA TABELA: dados brutos de derivativos de índices (índices futuros)
+        # NOVA TABELA: dados brutos de índices globais com HISTÓRICO (via brapi.dev)
         "indices_futuros": {
-            "descricao": "Cotações brutas de derivativos de índices globais (brapi.dev)",
-            "alias": "Índices Futuros",
+            "descricao": "Histórico de índices globais (brapi.dev - historicalDataPrice)",
+            "alias": "Índices Globais",
             "nome_fisico": "indices_futuros",
-            # Mantém o schema original da API, acrescido de metadados de taxonomia
+            # Schema base da API + campos do histórico e metadados de taxonomia
             "colunas_esperadas": [
+                # Metadados do índice
+                "symbol",
                 "currency",
                 "shortName",
                 "longName",
-                "regularMarketChange",
-                "regularMarketChangePercent",
-                "regularMarketTime",
-                "regularMarketPrice",
-                "regularMarketDayHigh",
-                "regularMarketDayLow",
-                "regularMarketDayRange",
-                "regularMarketPreviousClose",
-                "regularMarketOpen",
-                "regularMarketVolume",
-                "fiftyTwoWeekRange",
-                "fiftyTwoWeekLow",
-                "fiftyTwoWeekHigh",
-                "symbol",
                 "logourl",
                 "indice",
                 "regiao",
                 "categoria",
+                "fiftyTwoWeekLow",
+                "fiftyTwoWeekHigh",
+                # Histórico diário (historicalDataPrice)
+                "date",           # timestamp unix (segundos)
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "adjustedClose",
+                # Derivados para facilitar consumo
+                "trade_date",     # data do pregão (yyy-MM-dd)
             ],
         },
     },
@@ -125,10 +125,10 @@ DEFINICAO_TABELAS = {
             "fonte": "series_bacen",
             "colunas_esperadas": ["ref_date", "idx_value", "idx_type", "frequency"],
         },
-        # NOVA TABELA: série diária de derivativos de índices
+        # NOVA TABELA: série diária de índices globais normalizada
         "tb_mkt_idx_fut_day": {
-            "descricao": "Série histórica diária de derivativos de índices globais",
-            "alias": "Índices Futuros Diário",
+            "descricao": "Série histórica diária de índices globais",
+            "alias": "Índices Globais Diário",
             "nome_fisico": "tb_mkt_idx_fut_day",
             "fonte": "indices_futuros",
             "colunas_esperadas": [
@@ -183,10 +183,10 @@ DEFINICAO_TABELAS = {
                 "last_update",
             ],
         },
-        # NOVA TABELA: performance de derivativos de índices globais
+        # NOVA TABELA: performance de índices globais
         "tb_mkt_idx_fut_perf": {
-            "descricao": "Análise de performance de derivativos de índices globais",
-            "alias": "Performance Índices Futuros",
+            "descricao": "Análise de performance de índices globais",
+            "alias": "Performance Índices Globais",
             "nome_fisico": "tb_mkt_idx_fut_perf",
             "fonte": "tb_mkt_idx_fut_day",
             "colunas_esperadas": [
@@ -210,7 +210,7 @@ DEFINICAO_TABELAS = {
     },
 }
 
-# Taxonomia padrão para derivativos de índices (índices futuros)
+# Taxonomia padrão para índices globais
 INDICES_FUTUROS_PADRAO: Dict[str, Dict[str, str]] = {
     # América do Norte
     "IndSp500": {"ticker": "^GSPC", "regiao": "US", "categoria": "equity_index"},
@@ -226,7 +226,7 @@ INDICES_FUTUROS_PADRAO: Dict[str, Dict[str, str]] = {
     "IndBovespa": {"ticker": "^BVSP", "regiao": "BR", "categoria": "equity_index"},
     "IndIFIX": {"ticker": "IFIX.SA", "regiao": "BR", "categoria": "reit_index"},
     "IndIPSA": {"ticker": "^IPSA", "regiao": "CL", "categoria": "equity_index"},
-    "IndCaso30": {"ticker": "^CASO30", "regiao": "CL", "categoria": "equity_index"},
+    # REMOVIDO IndCaso30 (estava dando 404)
     "IndMerval": {"ticker": "^MERV", "regiao": "AR", "categoria": "equity_index"},
     "IndIPC": {"ticker": "^MXX", "regiao": "MX", "categoria": "equity_index"},
 
