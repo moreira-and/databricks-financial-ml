@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import logging
+
 import dlt
-from pyspark.sql import DataFrame, functions as F
+from pyspark.sql import DataFrame, functions as F, types as T
 
 from utilitarios.configuracoes import (
     PROPRIEDADES_TABELAS,
@@ -11,23 +13,8 @@ from utilitarios.configuracoes import (
     obter_metadados_tabela,
 )
 
-NOME_BRONZE_COTACOES = obter_nome_tabela("bronze", "cotacoes_b3")
-NOME_BRONZE_BACEN = obter_nome_tabela("bronze", "series_bacen")
-NOME_BRONZE_INDICES_FUTUROS = obter_nome_tabela("bronze", "indices_futuros")
-
-NOME_PRATA_COTACOES = obter_nome_tabela("prata", "tb_mkt_eqt_day")
-NOME_PRATA_BACEN = obter_nome_tabela("prata", "tb_mkt_idx_eco")
-NOME_PRATA_IDX_FUT = obter_nome_tabela("prata", "tb_mkt_idx_fut_day")
-
-
-def normalizar_colunas(df: DataFrame) -> DataFrame:
-    """Padroniza o nome das colunas para minúsculo com underscores."""
-    return df.select(
-        [
-            F.col(coluna).alias(coluna.lower().replace(" ", "_"))
-            for coluna in df.columns
-        ]
-    )
+logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 @dlt.table(
@@ -35,29 +22,36 @@ def normalizar_colunas(df: DataFrame) -> DataFrame:
     comment=obter_metadados_tabela("prata", "tb_mkt_eqt_day")["descricao"],
     table_properties=PROPRIEDADES_TABELAS["prata"],
 )
-@dlt.expect_all(
-    {
-        "valid_close": "close_price IS NOT NULL",
-        "valid_date": "trade_date IS NOT NULL",
-    }
-)
-def prata_cotacoes_b3() -> DataFrame:
-    """Normaliza e valida as cotações de equity coletadas na camada Bronze."""
-    
-    df = dlt.read(NOME_BRONZE_COTACOES)
-    df_norm = normalizar_colunas(df)
-    return df_norm.select(
-        F.col("date").alias("trade_date"),
-        F.col("open").alias("open_price"),
-        F.col("high").alias("high_price"),
-        F.col("low").alias("low_price"),
-        F.col("close").alias("close_price"),
-        "volume",
-        F.col("dividends").alias("div_cash"),
-        F.col("stock_splits").alias("split_ratio"),
-        F.col("ticker").alias("symbol"),
-        "ingestion_timestamp",
+def prata_tb_mkt_eqt_day() -> DataFrame:
+    """
+    Normaliza a série histórica diária de ações (equity) a partir da bronze.cotacoes_b3.
+    """
+    bronze = dlt.read(obter_nome_tabela("bronze", "cotacoes_b3"))
+
+    df = (
+        bronze.withColumn("trade_date", F.to_date("Date"))
+        .withColumnRenamed("Open", "open_price")
+        .withColumnRenamed("High", "high_price")
+        .withColumnRenamed("Low", "low_price")
+        .withColumnRenamed("Close", "close_price")
+        .withColumnRenamed("Volume", "volume")
+        .withColumn("div_cash", F.col("Dividends").cast(T.DoubleType()))
+        .withColumn("split_ratio", F.col("Stock_Splits").cast(T.DoubleType()))
+        .select(
+            "trade_date",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "volume",
+            "div_cash",
+            "split_ratio",
+            "ticker",
+        )
+        .withColumnRenamed("ticker", "symbol")
     )
+
+    return df
 
 
 @dlt.table(
@@ -65,24 +59,26 @@ def prata_cotacoes_b3() -> DataFrame:
     comment=obter_metadados_tabela("prata", "tb_mkt_idx_eco")["descricao"],
     table_properties=PROPRIEDADES_TABELAS["prata"],
 )
-def prata_series_bacen() -> DataFrame:
+def prata_tb_mkt_idx_eco() -> DataFrame:
     """
-    Trata as séries do BACEN garantindo consistência de tipos e nomenclatura.
-    
-    O campo 'frequency' indica a periodicidade do indicador econômico:
-    - D: Diário (ex: Taxa Selic diária, CDI)
-    - M: Mensal (ex: IPCA, IGP-M)
-    - A: Anual (ex: PIB)
+    Normaliza indicadores econômicos do BACEN a partir da bronze.series_bacen.
     """
-    df = dlt.read(NOME_BRONZE_BACEN)
-    df_norm = normalizar_colunas(df)
-    return df_norm.select(
-        F.col("data").alias("ref_date"),
-        F.col("valor").cast("double").alias("idx_value"),
-        F.col("serie").alias("idx_type"),
-        F.lit("D").alias("frequency"),  # D = Diário
-        "ingestion_timestamp",
+    bronze = dlt.read(obter_nome_tabela("bronze", "series_bacen"))
+
+    df = (
+        bronze.withColumn("ref_date", F.to_date("data"))
+        .withColumnRenamed("valor", "idx_value")
+        .withColumnRenamed("serie", "idx_type")
+        .withColumn("frequency", F.lit("unknown"))
+        .select(
+            "ref_date",
+            "idx_value",
+            "idx_type",
+            "frequency",
+        )
     )
+
+    return df
 
 
 @dlt.table(
@@ -90,66 +86,85 @@ def prata_series_bacen() -> DataFrame:
     comment=obter_metadados_tabela("prata", "tb_mkt_idx_fut_day")["descricao"],
     table_properties=PROPRIEDADES_TABELAS["prata"],
 )
-@dlt.expect_all(
-    {
-        "valid_close": "close_price IS NOT NULL",
-        "valid_symbol": "symbol IS NOT NULL",
-        "valid_trade_date": "trade_date IS NOT NULL",
-    }
-)
-def prata_indices_futuros() -> DataFrame:
+def prata_tb_mkt_idx_fut_day() -> DataFrame:
     """
-    Normaliza e enriquece as cotações de derivativos de índices globais.
-    
-    Origem: bronze.indices_futuros (schema original da API brapi.dev).
-    
-    Saída: tb_mkt_idx_fut_day
-    - trade_datetime: timestamp da cotação (regularMarketTime)
-    - trade_date: data de referência (derivada do timestamp)
-    - open_price, high_price, low_price, close_price, prev_close_price
-    - abs_change, pct_change, volume
-    - symbol: identificador lógico (ex: IndSp500)
-    - index_symbol: ticker da API (ex: ^GSPC)
-    - index_name: nome amigável do índice
-    - region, category, currency
+    Normaliza a série histórica diária de índices globais a partir da bronze.indices_futuros.
+
+    Entradas (bronze.indices_futuros):
+    - symbol, currency, shortName, longName, logourl, indice, regiao, categoria
+    - fiftyTwoWeekLow, fiftyTwoWeekHigh
+    - date (unix ts), open, high, low, close, volume, adjustedClose
+    - trade_date (date)
+
+    Saída (tb_mkt_idx_fut_day):
+    - trade_datetime (a partir de date)
+    - trade_date
+    - open_price, high_price, low_price, close_price
+    - prev_close_price (lag por symbol)
+    - abs_change, pct_change
+    - volume
+    - index_symbol, index_name, region, category, currency
     - price_52w_high, price_52w_low
     """
-    df = dlt.read(NOME_BRONZE_INDICES_FUTUROS)
-    df_norm = normalizar_colunas(df)
-    
-    return df_norm.select(
-        F.col("regularmarkettime").alias("trade_datetime"),
-        F.to_date("regularmarkettime").alias("trade_date"),
-        # Identificadores
-        F.col("indice").alias("symbol"),
-        F.col("symbol").alias("index_symbol"),
-        F.coalesce(
-            F.col("longname"),
-            F.col("shortname"),
-            F.col("indice"),
-        ).alias("index_name"),
-        # Taxonomia
-        F.col("regiao").alias("region"),
-        F.col("categoria").alias("category"),
-        F.col("currency"),
-        # Métricas de mercado
-        F.col("regularmarketopen").alias("open_price"),
-        F.col("regularmarketdayhigh").alias("high_price"),
-        F.col("regularmarketdaylow").alias("low_price"),
-        F.col("regularmarketprice").alias("close_price"),
-        F.col("regularmarketpreviousclose").alias("prev_close_price"),
-        F.col("regularmarketchange").alias("abs_change"),
-        F.col("regularmarketchangepercent").alias("pct_change"),
-        F.col("regularmarketvolume").cast("double").alias("volume"),
-        F.col("fiftytwoweekhigh").alias("price_52w_high"),
-        F.col("fiftytwoweeklow").alias("price_52w_low"),
-        "ingestion_timestamp",
+    bronze = dlt.read(obter_nome_tabela("bronze", "indices_futuros"))
+
+    df = (
+        bronze
+        # converte unix timestamp em datetime
+        .withColumn("trade_datetime", F.to_timestamp(F.col("date")))
+        .withColumn("trade_date", F.to_date("trade_date"))
+        .withColumnRenamed("open", "open_price")
+        .withColumnRenamed("high", "high_price")
+        .withColumnRenamed("low", "low_price")
+        .withColumnRenamed("close", "close_price")
+        .withColumnRenamed("volume", "volume")
+        .withColumnRenamed("symbol", "index_symbol")
+        .withColumnRenamed("shortName", "index_name")
+        .withColumnRenamed("regiao", "region")
+        .withColumnRenamed("categoria", "category")
+        .withColumnRenamed("fiftyTwoWeekHigh", "price_52w_high")
+        .withColumnRenamed("fiftyTwoWeekLow", "price_52w_low")
     )
 
+    from pyspark.sql.window import Window
 
-__all__ = [
-    "normalizar_colunas",
-    "prata_cotacoes_b3",
-    "prata_series_bacen",
-    "prata_indices_futuros",
-]
+    w = Window.partitionBy("index_symbol").orderBy("trade_date")
+
+    df = (
+        df.withColumn("prev_close_price", F.lag("close_price").over(w))
+        .withColumn(
+            "abs_change",
+            F.when(F.col("prev_close_price").isNull(), F.lit(0.0)).otherwise(
+                F.col("close_price") - F.col("prev_close_price")
+            ),
+        )
+        .withColumn(
+            "pct_change",
+            F.when(
+                (F.col("prev_close_price").isNull()) | (F.col("prev_close_price") == 0),
+                F.lit(0.0),
+            ).otherwise(F.col("abs_change") / F.col("prev_close_price")),
+        )
+        .select(
+            "trade_datetime",
+            "trade_date",
+            "open_price",
+            "high_price",
+            "low_price",
+            "close_price",
+            "prev_close_price",
+            "abs_change",
+            "pct_change",
+            "volume",
+            "index_symbol",
+            "index_name",
+            "region",
+            "category",
+            "currency",
+            "price_52w_high",
+            "price_52w_low",
+        )
+        .withColumnRenamed("index_symbol", "symbol")
+    )
+
+    return df

@@ -10,8 +10,8 @@ from typing import Dict, List, Optional, Any, Union
 # Definição dos esquemas para cada camada
 ESQUEMAS = {
     "bronze": "aafn_ing",  # Ingestão - Dados brutos
-    "prata": "aafn_tgt",   # Target - Dados normalizados
-    "ouro": "aafn_ddm"     # Data Mart - Dados analíticos
+    "prata": "aafn_tgt",  # Target - Dados normalizados
+    "ouro": "aafn_ddm",  # Data Mart - Dados analíticos
 }
 
 # Qualidade e propriedades por camada
@@ -22,7 +22,7 @@ PROPRIEDADES_TABELAS = {
         "pipelines.trigger.interval": "12 hours",  # Atualização a cada 12 horas
         "delta.autoOptimize.optimizeWrite": "true",
         "delta.autoOptimize.autoCompact": "true",
-        "delta.enableChangeDataFeed": "true"
+        "delta.enableChangeDataFeed": "true",
     },
     "prata": {
         "quality": "silver",
@@ -30,7 +30,7 @@ PROPRIEDADES_TABELAS = {
         "pipelines.trigger.interval": "12 hours",
         "delta.autoOptimize.optimizeWrite": "true",
         "delta.autoOptimize.autoCompact": "true",
-        "delta.enableChangeDataFeed": "true"
+        "delta.enableChangeDataFeed": "true",
     },
     "ouro": {
         "quality": "gold",
@@ -38,8 +38,8 @@ PROPRIEDADES_TABELAS = {
         "pipelines.trigger.interval": "12 hours",
         "delta.autoOptimize.optimizeWrite": "true",
         "delta.autoOptimize.autoCompact": "true",
-        "delta.enableChangeDataFeed": "true"
-    }
+        "delta.enableChangeDataFeed": "true",
+    },
 }
 
 # Estrutura das tabelas por camada e domínio
@@ -68,34 +68,34 @@ DEFINICAO_TABELAS = {
             "nome_fisico": "series_bacen",
             "colunas_esperadas": ["data", "valor", "serie"],
         },
-        # NOVA TABELA: dados brutos de derivativos de índices (índices futuros)
+        # NOVA TABELA: dados brutos de índices globais com HISTÓRICO (via brapi.dev)
         "indices_futuros": {
-            "descricao": "Cotações brutas de derivativos de índices globais (brapi.dev)",
-            "alias": "Índices Futuros",
+            "descricao": "Histórico de índices globais (brapi.dev - historicalDataPrice)",
+            "alias": "Índices Globais",
             "nome_fisico": "indices_futuros",
-            # Mantém o schema original da API, acrescido de metadados de taxonomia
+            # Schema base da API + campos do histórico e metadados de taxonomia
             "colunas_esperadas": [
+                # Metadados do índice
+                "symbol",
                 "currency",
                 "shortName",
                 "longName",
-                "regularMarketChange",
-                "regularMarketChangePercent",
-                "regularMarketTime",
-                "regularMarketPrice",
-                "regularMarketDayHigh",
-                "regularMarketDayLow",
-                "regularMarketDayRange",
-                "regularMarketPreviousClose",
-                "regularMarketOpen",
-                "regularMarketVolume",
-                "fiftyTwoWeekRange",
-                "fiftyTwoWeekLow",
-                "fiftyTwoWeekHigh",
-                "symbol",
                 "logourl",
                 "indice",
                 "regiao",
                 "categoria",
+                "fiftyTwoWeekLow",
+                "fiftyTwoWeekHigh",
+                # Histórico diário (historicalDataPrice)
+                "date",  # timestamp unix (segundos)
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "adjustedClose",
+                # Derivados para facilitar consumo
+                "trade_date",  # data do pregão (yyy-MM-dd)
             ],
         },
     },
@@ -125,10 +125,10 @@ DEFINICAO_TABELAS = {
             "fonte": "series_bacen",
             "colunas_esperadas": ["ref_date", "idx_value", "idx_type", "frequency"],
         },
-        # NOVA TABELA: série diária de derivativos de índices
+        # NOVA TABELA: série diária de índices globais normalizada
         "tb_mkt_idx_fut_day": {
-            "descricao": "Série histórica diária de derivativos de índices globais",
-            "alias": "Índices Futuros Diário",
+            "descricao": "Série histórica diária de índices globais",
+            "alias": "Índices Globais Diário",
             "nome_fisico": "tb_mkt_idx_fut_day",
             "fonte": "indices_futuros",
             "colunas_esperadas": [
@@ -183,10 +183,10 @@ DEFINICAO_TABELAS = {
                 "last_update",
             ],
         },
-        # NOVA TABELA: performance de derivativos de índices globais
+        # NOVA TABELA: performance de índices globais
         "tb_mkt_idx_fut_perf": {
-            "descricao": "Análise de performance de derivativos de índices globais",
-            "alias": "Performance Índices Futuros",
+            "descricao": "Análise de performance de índices globais",
+            "alias": "Performance Índices Globais",
             "nome_fisico": "tb_mkt_idx_fut_perf",
             "fonte": "tb_mkt_idx_fut_day",
             "colunas_esperadas": [
@@ -210,7 +210,7 @@ DEFINICAO_TABELAS = {
     },
 }
 
-# Taxonomia padrão para derivativos de índices (índices futuros)
+# Taxonomia padrão para índices globais
 INDICES_FUTUROS_PADRAO: Dict[str, Dict[str, str]] = {
     # América do Norte
     "IndSp500": {"ticker": "^GSPC", "regiao": "US", "categoria": "equity_index"},
@@ -221,24 +221,25 @@ INDICES_FUTUROS_PADRAO: Dict[str, Dict[str, str]] = {
     "IndAmex": {"ticker": "^XAX", "regiao": "US", "categoria": "equity_index"},
     "IndVix": {"ticker": "^VIX", "regiao": "US", "categoria": "volatility_index"},
     "IndTSX": {"ticker": "^GSPTSE", "regiao": "CA", "categoria": "equity_index"},
-
     # Brasil / América Latina
     "IndBovespa": {"ticker": "^BVSP", "regiao": "BR", "categoria": "equity_index"},
     "IndIFIX": {"ticker": "IFIX.SA", "regiao": "BR", "categoria": "reit_index"},
     "IndIPSA": {"ticker": "^IPSA", "regiao": "CL", "categoria": "equity_index"},
-    "IndCaso30": {"ticker": "^CASO30", "regiao": "CL", "categoria": "equity_index"},
+    # REMOVIDO IndCaso30 (estava dando 404)
     "IndMerval": {"ticker": "^MERV", "regiao": "AR", "categoria": "equity_index"},
     "IndIPC": {"ticker": "^MXX", "regiao": "MX", "categoria": "equity_index"},
-
     # Europa
     "IndFTSE100": {"ticker": "^FTSE", "regiao": "UK", "categoria": "equity_index"},
     "IndBUK100P": {"ticker": "^BUK100P", "regiao": "UK", "categoria": "equity_index"},
     "IndDax": {"ticker": "^GDAXI", "regiao": "DE", "categoria": "equity_index"},
-    "IndEuroStoxx50": {"ticker": "^STOXX50E", "regiao": "EU", "categoria": "equity_index"},
+    "IndEuroStoxx50": {
+        "ticker": "^STOXX50E",
+        "regiao": "EU",
+        "categoria": "equity_index",
+    },
     "IndN100": {"ticker": "^N100", "regiao": "EU", "categoria": "equity_index"},
     "IndBFX": {"ticker": "^BFX", "regiao": "BE", "categoria": "equity_index"},
     "IndCAC40": {"ticker": "^FCHI", "regiao": "FR", "categoria": "equity_index"},
-
     # Ásia-Pacífico
     "IndAllOrd": {"ticker": "^AORD", "regiao": "APAC", "categoria": "equity_index"},
     "IndASX200": {"ticker": "^AXJO", "regiao": "APAC", "categoria": "equity_index"},
@@ -251,7 +252,6 @@ INDICES_FUTUROS_PADRAO: Dict[str, Dict[str, str]] = {
     "IndKLSE": {"ticker": "^KLSE", "regiao": "APAC", "categoria": "equity_index"},
     "IndNikkei": {"ticker": "^N225", "regiao": "APAC", "categoria": "equity_index"},
     "IndHangSeng": {"ticker": "^HSI", "regiao": "APAC", "categoria": "equity_index"},
-
     # Oriente Médio e África
     "IndTA125": {"ticker": "^TA125.TA", "regiao": "MEA", "categoria": "equity_index"},
     "IndJSE": {"ticker": "^JN0U.JO", "regiao": "MEA", "categoria": "equity_index"},
@@ -271,11 +271,11 @@ def obter_configuracao(chave: str, padrao: Optional[str] = None) -> Optional[str
     # Tenta variável de ambiente primeiro (converte chave.nested para CHAVE_NESTED)
     env_key = chave.replace(".", "_").upper()
     valor = os.environ.get(env_key)
-    
+
     # Se não encontrou na env, tenta no cache local
     if valor is None:
         valor = _config_local.get(chave)
-        
+
     # Retorna valor encontrado ou padrão
     return valor if valor is not None else padrao
 
@@ -294,18 +294,18 @@ def definir_configuracao_local(chave: str, valor: str) -> None:
 def obter_nome_tabela(camada: str, nome_base: str, incluir_esquema: bool = True) -> str:
     """
     Retorna o nome completo da tabela para a camada especificada.
-    
+
     Args:
         camada: Nome da camada ('bronze', 'prata' ou 'ouro')
         nome_base: Nome da tabela ou sua chave em DEFINICAO_TABELAS
         incluir_esquema: Se True, retorna o nome completo com esquema (ex: aafn_ing.tabela)
-    
+
     Returns:
         Nome da tabela, opcionalmente prefixado com o esquema
     """
     if camada not in ESQUEMAS:
         raise ValueError(f"Camada inválida: {camada}. Use: bronze, prata ou ouro")
-    
+
     # Primeiro tenta encontrar a tabela diretamente em DEFINICAO_TABELAS
     camada_def = DEFINICAO_TABELAS[camada]
     if nome_base in camada_def:
@@ -317,14 +317,14 @@ def obter_nome_tabela(camada: str, nome_base: str, incluir_esquema: bool = True)
             for chave, meta in camada_def.items()
             if meta.get("nome_fisico", chave) == nome_base
         ]
-        
+
         if not tabelas_encontradas:
             raise ValueError(
                 f"Tabela '{nome_base}' não encontrada na camada {camada}. "
                 f"Tabelas disponíveis: {list(camada_def.keys())}"
             )
         nome_tabela = tabelas_encontradas[0][0]
-    
+
     # Retorna com ou sem esquema
     if incluir_esquema:
         return f"{ESQUEMAS[camada]}.{nome_tabela}"
@@ -335,10 +335,10 @@ def obter_metadados_tabela(camada: str, nome_base: str) -> Dict[str, Any]:
     """Retorna os metadados de uma tabela específica."""
     if camada not in DEFINICAO_TABELAS:
         raise ValueError(f"Camada inválida: {camada}")
-        
+
     if nome_base not in DEFINICAO_TABELAS[camada]:
         raise ValueError(f"Tabela '{nome_base}' não encontrada na camada {camada}")
-        
+
     return DEFINICAO_TABELAS[camada][nome_base]
 
 

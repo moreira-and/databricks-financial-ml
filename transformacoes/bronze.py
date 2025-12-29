@@ -39,19 +39,16 @@ logger = logging.getLogger(__name__)
 )
 def bronze_cotacoes_b3() -> DataFrame:
     """Coleta cotações históricas da B3 na API do Yahoo Finance."""
-    
-    # Configurações com valores padrão
+
     tickers = obter_lista_configuracoes(
         "b3.tickers",
         "PETR4,VALE3,ITUB4,BBDC4,BBAS3,ABEV3,WEGE3,MGLU3,ELET3,B3SA3",
     )
-    
-    # Datas no formato correto (DD/MM/YYYY)
+
     hoje = datetime.utcnow()
     data_final = hoje.strftime("%d/%m/%Y")
     data_inicial = (hoje - pd.DateOffset(months=3)).strftime("%d/%m/%Y")
-    
-    # Schema esperado para validação
+
     schema = T.StructType(
         [
             T.StructField("Date", T.TimestampType(), False),
@@ -66,40 +63,31 @@ def bronze_cotacoes_b3() -> DataFrame:
             T.StructField("ingestion_timestamp", T.TimestampType(), False),
         ]
     )
-    
+
     try:
-        logger.info(
-            f"Iniciando coleta de dados B3 para {len(tickers)} tickers"
-        )
+        logger.info(f"Iniciando coleta de dados B3 para {len(tickers)} tickers")
         logger.info(f"Período: {data_inicial} até {data_final}")
-        
-        # Busca dados da API
+
         pdf = buscar_historico_b3(tickers, data_inicial, data_final)
-        
+
         if pdf.empty:
-            logger.warning(
-                f"Nenhum dado encontrado para os tickers: {tickers}"
-            )
+            logger.warning(f"Nenhum dado encontrado para os tickers: {tickers}")
             return criar_dataframe_vazio(schema)
-        
-        # Validação básica dos dados recebidos
+
         colunas_esperadas = set(schema.fieldNames()) - {"ingestion_timestamp"}
         colunas_recebidas = set(pdf.columns)
         if not colunas_esperadas.issubset(colunas_recebidas):
             faltantes = colunas_esperadas - colunas_recebidas
             raise ValueError(f"Colunas ausentes nos dados: {faltantes}")
-        
-        # Adiciona timestamp de ingestão
+
         ts_ingestao = timestamp_ingestao()
         pdf["ingestion_timestamp"] = ts_ingestao
         logger.info(f"Timestamp de ingestão: {ts_ingestao}")
-        
-        # Garante tipos corretos e nomes de colunas padronizados
+
         pdf = pdf.rename(columns={"Stock Splits": "Stock_Splits"})
-        
-        # Trata valores nulos nas datas antes de converter
+
         pdf["Date"] = pd.to_datetime(pdf["Date"], errors="coerce")
-        
+
         colunas_numericas = [
             "Open",
             "High",
@@ -111,14 +99,12 @@ def bronze_cotacoes_b3() -> DataFrame:
         ]
         for col in colunas_numericas:
             pdf[col] = pd.to_numeric(pdf[col], errors="coerce").astype(float)
-        
-        # Converte para DataFrame Spark com schema validado
+
         df = spark.createDataFrame(pdf, schema=schema)
         logger.info(f"Total de registros coletados: {df.count()}")
-        
-        # Otimiza particionamento e ordenação
+
         return df.repartition("ticker").sortWithinPartitions("Date")
-    
+
     except ValueError as e:
         logger.error(f"Erro de validação nos dados B3: {str(e)}")
         return criar_dataframe_vazio(schema)
@@ -135,35 +121,31 @@ def bronze_cotacoes_b3() -> DataFrame:
 )
 def bronze_series_bacen() -> DataFrame:
     """Busca séries temporais no serviço SGS do BACEN."""
-    
-    # Séries econômicas a serem capturadas
+
     series_padrao = {
-        "selic": 1178,       # Taxa Selic diária
-        "cdi": 12,           # CDI diário
-        "ipca": 433,         # IPCA mensal
-        "poupanca": 195,     # Rendimento poupança mensal
-        "igpm": 189,         # IGP-M mensal
-        "inpc": 188,         # INPC mensal
-        "igpdi": 190,        # IGP-DI mensal
-        "selic_meta": 432,   # Meta Selic definida pelo COPOM
+        "selic": 1178,
+        "cdi": 12,
+        "ipca": 433,
+        "poupanca": 195,
+        "igpm": 189,
+        "inpc": 188,
+        "igpdi": 190,
+        "selic_meta": 432,
     }
-    
-    # Obtém configuração ou usa padrão
+
     series = json.loads(
         obter_configuracao(
             "bacen.series",
             json.dumps(series_padrao),
         )
     )
-    
-    # Datas no formato correto (DD/MM/YYYY)
+
     data_inicial = obter_configuracao("bacen.start_date", "01/01/2020")
     data_final = obter_configuracao(
         "bacen.end_date",
         datetime.utcnow().strftime("%d/%m/%Y"),
     )
-    
-    # Schema esperado
+
     schema = T.StructType(
         [
             T.StructField("data", T.TimestampType(), False),
@@ -172,40 +154,33 @@ def bronze_series_bacen() -> DataFrame:
             T.StructField("ingestion_timestamp", T.TimestampType(), False),
         ]
     )
-    
+
     try:
         logger.info(f"Iniciando coleta de {len(series)} séries do BACEN")
         logger.info(f"Período: {data_inicial} até {data_final}")
-        
-        # Busca dados da API
+
         pdf = buscar_series_bacen(series, data_inicial, data_final)
-        
+
         if pdf.empty:
             logger.warning("Nenhum dado retornado do BACEN")
             return criar_dataframe_vazio(schema)
-        
-        # Remove linhas com data nula antes de preencher
+
         pdf = pdf.dropna(subset=["data"])
-        
-        # Preenche valores nulos nas colunas numéricas e de texto
+
         pdf["valor"] = pdf["valor"].fillna(0.0)
         pdf["serie"] = pdf["serie"].fillna("NA")
-        
-        # Trata valores nulos nas datas
+
         pdf["data"] = pd.to_datetime(pdf["data"], errors="coerce")
-        
-        # Adiciona timestamp de ingestão
+
         ts_ingestao = timestamp_ingestao()
         pdf["ingestion_timestamp"] = ts_ingestao
         logger.info(f"Timestamp de ingestão: {ts_ingestao}")
-        
-        # Converte para DataFrame Spark com schema validado
+
         df = spark.createDataFrame(pdf, schema=schema)
         logger.info(f"Total de registros coletados: {df.count()}")
-        
-        # Otimiza particionamento
+
         return df.repartition("serie")
-    
+
     except Exception as e:
         logger.error(f"Erro ao processar séries BACEN: {str(e)}")
         logger.error("Stack trace completo:", exc_info=True)
@@ -219,14 +194,13 @@ def bronze_series_bacen() -> DataFrame:
 )
 def bronze_indices_futuros() -> DataFrame:
     """
-    Coleta cotações atuais de derivativos de índices globais via brapi.dev.
-    
-    Mantém o schema original da API (regularMarket*) acrescido de:
-    - indice: identificador lógico (ex: IndSp500, IndBovespa)
-    - regiao: macro região
-    - categoria: tipo de índice
+    Coleta HISTÓRICO diário de índices globais via brapi.dev.
+
+    Expande o campo `historicalDataPrice` da API e gera:
+    - 1 linha por índice por dia (histórico de ~3 meses, conforme range)
+    - trade_date (Date)
+    - ingestion_timestamp
     """
-    # Permite override via spark.conf / env, mas mantém padrão do repositório
     indices_cfg_str = obter_configuracao(
         "indices.futuros.config",
         json.dumps(INDICES_FUTUROS_PADRAO),
@@ -239,109 +213,102 @@ def bronze_indices_futuros() -> DataFrame:
             "recuando para configuração padrão."
         )
         indices_cfg = INDICES_FUTUROS_PADRAO
-    
-    # Schema esperado
+
     schema = T.StructType(
         [
+            T.StructField("symbol", T.StringType(), False),
             T.StructField("currency", T.StringType(), True),
             T.StructField("shortName", T.StringType(), True),
             T.StructField("longName", T.StringType(), True),
-            T.StructField("regularMarketChange", T.DoubleType(), True),
-            T.StructField("regularMarketChangePercent", T.DoubleType(), True),
-            T.StructField("regularMarketTime", T.TimestampType(), True),
-            T.StructField("regularMarketPrice", T.DoubleType(), True),
-            T.StructField("regularMarketDayHigh", T.DoubleType(), True),
-            T.StructField("regularMarketDayLow", T.DoubleType(), True),
-            T.StructField("regularMarketDayRange", T.StringType(), True),
-            T.StructField("regularMarketPreviousClose", T.DoubleType(), True),
-            T.StructField("regularMarketOpen", T.DoubleType(), True),
-            T.StructField("regularMarketVolume", T.DoubleType(), True),
-            T.StructField("fiftyTwoWeekRange", T.StringType(), True),
-            T.StructField("fiftyTwoWeekLow", T.DoubleType(), True),
-            T.StructField("fiftyTwoWeekHigh", T.DoubleType(), True),
-            T.StructField("symbol", T.StringType(), True),
             T.StructField("logourl", T.StringType(), True),
             T.StructField("indice", T.StringType(), False),
             T.StructField("regiao", T.StringType(), True),
             T.StructField("categoria", T.StringType(), True),
+            T.StructField("fiftyTwoWeekLow", T.DoubleType(), True),
+            T.StructField("fiftyTwoWeekHigh", T.DoubleType(), True),
+            T.StructField("date", T.LongType(), True),  # timestamp unix em segundos
+            T.StructField("open", T.DoubleType(), True),
+            T.StructField("high", T.DoubleType(), True),
+            T.StructField("low", T.DoubleType(), True),
+            T.StructField("close", T.DoubleType(), True),
+            T.StructField("volume", T.LongType(), True),
+            T.StructField("adjustedClose", T.DoubleType(), True),
+            T.StructField("trade_date", T.DateType(), True),
             T.StructField("ingestion_timestamp", T.TimestampType(), False),
         ]
     )
-    
+
     try:
         logger.info(
-            f"Iniciando captura de derivativos de índices: "
+            f"Iniciando captura HISTÓRICA de índices globais: "
             f"{list(indices_cfg.keys())}"
         )
-        pdf = buscar_indices_futuros(indices_cfg)
-        
+        pdf = buscar_indices_futuros(indices_cfg, range_periodo="3mo", interval="1d")
+
         if pdf.empty:
-            logger.warning("Nenhum dado retornado para índices futuros.")
+            logger.warning("Nenhum dado retornado para índices globais.")
             return criar_dataframe_vazio(schema)
-        
+
         colunas_esperadas = set(
             [
+                "symbol",
                 "currency",
                 "shortName",
                 "longName",
-                "regularMarketChange",
-                "regularMarketChangePercent",
-                "regularMarketTime",
-                "regularMarketPrice",
-                "regularMarketDayHigh",
-                "regularMarketDayLow",
-                "regularMarketDayRange",
-                "regularMarketPreviousClose",
-                "regularMarketOpen",
-                "regularMarketVolume",
-                "fiftyTwoWeekRange",
-                "fiftyTwoWeekLow",
-                "fiftyTwoWeekHigh",
-                "symbol",
                 "logourl",
                 "indice",
                 "regiao",
                 "categoria",
+                "fiftyTwoWeekLow",
+                "fiftyTwoWeekHigh",
+                "date",
+                "open",
+                "high",
+                "low",
+                "close",
+                "volume",
+                "adjustedClose",
+                "trade_date",
             ]
         )
         colunas_recebidas = set(pdf.columns)
         if not colunas_esperadas.issubset(colunas_recebidas):
             faltantes = colunas_esperadas - colunas_recebidas
             raise ValueError(f"Colunas ausentes nos dados de índices: {faltantes}")
-        
-        # Conversão de tipos básicos
-        pdf["regularMarketTime"] = pd.to_datetime(
-            pdf["regularMarketTime"], errors="coerce"
-        )
-        colunas_numericas = [
-            "regularMarketChange",
-            "regularMarketChangePercent",
-            "regularMarketPrice",
-            "regularMarketDayHigh",
-            "regularMarketDayLow",
-            "regularMarketPreviousClose",
-            "regularMarketOpen",
-            "regularMarketVolume",
+
+        # timestamp de ingestão
+        ts_ingestao = timestamp_ingestao()
+        pdf["ingestion_timestamp"] = ts_ingestao
+        logger.info(f"Timestamp de ingestão (índices globais): {ts_ingestao}")
+
+        # Garante tipos
+        pdf["trade_date"] = pd.to_datetime(pdf["trade_date"], errors="coerce").dt.date
+
+        numericas = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "adjustedClose",
             "fiftyTwoWeekLow",
             "fiftyTwoWeekHigh",
         ]
-        for col in colunas_numericas:
+        for col in numericas:
             pdf[col] = pd.to_numeric(pdf[col], errors="coerce")
-        
-        # Timestamp de ingestão
-        ts_ingestao = timestamp_ingestao()
-        pdf["ingestion_timestamp"] = ts_ingestao
-        logger.info(f"Timestamp de ingestão (índices futuros): {ts_ingestao}")
-        
-        # Cria DataFrame Spark com schema explícito
+
+        if "volume" in pdf.columns:
+            pdf["volume"] = (
+                pd.to_numeric(pdf["volume"], errors="coerce").fillna(0).astype("int64")
+            )
+
         pdf = pdf[[field.name for field in schema.fields]]
         df = spark.createDataFrame(pdf, schema=schema)
-        logger.info(f"Total de registros de índices futuros: {df.count()}")
-        
-        return df.repartition("indice").sortWithinPartitions("regularMarketTime")
-    
+        logger.info(f"Total de registros de índices globais (histórico): {df.count()}")
+
+        return df.repartition("symbol").sortWithinPartitions("trade_date")
+
     except Exception as e:
-        logger.error(f"Erro ao processar índices futuros: {str(e)}")
+        logger.error(f"Erro ao processar índices globais: {str(e)}")
         logger.error("Stack trace completo:", exc_info=True)
         return criar_dataframe_vazio(schema)
 
