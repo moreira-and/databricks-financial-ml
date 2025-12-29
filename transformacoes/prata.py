@@ -128,9 +128,6 @@ def prata_tb_mkt_idx_fut_day() -> DataFrame:
         .withColumnRenamed("fiftyTwoWeekLow", "price_52w_low")
     )
     
-    window_spec = (
-        F.window
-    )
     
     from pyspark.sql.window import Window
     w = Window.partitionBy("index_symbol").orderBy("trade_date")
