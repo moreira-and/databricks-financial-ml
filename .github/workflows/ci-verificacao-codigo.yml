@@ -1,5 +1,121 @@
-test-syntax:
-    name: Validação de Sintaxe
+name: CI - Verificação de Código
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  lint-and-format:
+    name: Linting e Formatação
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        
+    - name: Instalar dependências de desenvolvimento
+      run: |
+        python -m pip install --upgrade pip
+        pip install flake8 black isort pylint mypy
+        
+    - name: Verificar formatação com Black
+      run: |
+        black --check --diff transformacoes/ pipelines/ utilitarios/
+      
+    - name: Verificar imports com isort
+      run: |
+        isort --check-only --diff transformacoes/ pipelines/ utilitarios/
+      
+    - name: Análise estática com Flake8
+      run: |
+        # Ignora erros de imports do Databricks (dlt, pyspark quando não instalado)
+        flake8 transformacoes/ pipelines/ utilitarios/ \
+          --max-line-length=100 \
+          --extend-ignore=E203,W503,F401 \
+          --per-file-ignores="__init__.py:F401,transformacoes/bronze.py:F821,transformacoes/prata.py:F821,transformacoes/ouro.py:F821,utilitarios/fontes_dados.py:F821" \
+          --exclude=.git,__pycache__,.venv,venv,build,dist
+
+  security-scan:
+    name: Verificação de Segurança
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Instalar Bandit
+      run: |
+        pip install bandit[toml]
+        
+    - name: Análise de segurança com Bandit
+      run: |
+        bandit -r transformacoes/ pipelines/ utilitarios/ \
+          -f json -o bandit-report.json \
+          --severity-level medium \
+          --confidence-level medium || true
+      
+    - name: Upload do relatório de segurança
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: bandit-security-report
+        path: bandit-report.json
+
+  code-quality:
+    name: Qualidade de Código
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        cache: 'pip'
+        
+    - name: Instalar dependências
+      run: |
+        pip install pylint radon
+        
+    - name: Análise com Pylint
+      run: |
+        pylint transformacoes/ pipelines/ utilitarios/ \
+          --disable=import-error,no-name-in-module,no-member \
+          --max-line-length=100 \
+          --output-format=text \
+          --reports=y \
+          --exit-zero > pylint-report.txt
+        cat pylint-report.txt
+      
+    - name: Análise de complexidade ciclomática
+      run: |
+        radon cc transformacoes/ pipelines/ utilitarios/ -a -s || true
+        radon mi transformacoes/ pipelines/ utilitarios/ -s || true
+      
+    - name: Upload do relatório Pylint
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: pylint-report
+        path: pylint-report.txt
+
+  test-syntax:
+    name: Validação de Sintaxe e Imports
     runs-on: ubuntu-latest
     
     steps:
@@ -241,3 +357,76 @@ test-syntax:
         
         echo "Validando imports do pipeline_financeiro..."
         python -c "import sys; sys.path.insert(0, 'mock_libs'); import pipelines.pipeline_financeiro; print('✅ pipeline_financeiro.py OK')"
+
+  documentation-check:
+    name: Verificação de Documentação
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Instalar pydocstyle
+      run: |
+        pip install pydocstyle
+        
+    - name: Verificar docstrings
+      run: |
+        pydocstyle transformacoes/ pipelines/ utilitarios/ \
+          --convention=google \
+          --add-ignore=D100,D104 \
+          --match='(?!test_).*\.py' || true
+
+  dependency-check:
+    name: Verificação de Dependências
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Verificar vulnerabilidades com Safety
+      run: |
+        pip install safety
+        # Cria requirements.txt temporário com dependências conhecidas
+        cat > requirements-check.txt << EOF
+        pandas>=1.5.0
+        requests>=2.28.0
+        EOF
+        safety check --file requirements-check.txt --output text || true
+
+  summary:
+    name: Resumo da Verificação
+    runs-on: ubuntu-latest
+    needs: [lint-and-format, security-scan, code-quality, test-syntax, documentation-check, dependency-check]
+    if: always()
+    
+    steps:
+    - name: Verificar status dos jobs
+      run: |
+        echo "## 📊 Resumo da Verificação CI" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "| Job | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Linting e Formatação | ${{ needs.lint-and-format.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Verificação de Segurança | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Qualidade de Código | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Validação de Sintaxe | ${{ needs.test-syntax.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Verificação de Documentação | ${{ needs.documentation-check.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Verificação de Dependências | ${{ needs.dependency-check.result }} |" >> $GITHUB_STEP_SUMMARY
+        
+    - name: Falhar se jobs críticos falharam
+      if: needs.lint-and-format.result == 'failure' || needs.test-syntax.result == 'failure'
+      run: |
+        echo "❌ Jobs críticos falharam. Verifique os logs acima."
+        exit 1
