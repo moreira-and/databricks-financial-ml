@@ -21,15 +21,11 @@ As camadas tratam integrações da B3, do BACEN e de **índices globais** (deriv
 
 ### Tabelas por camada
 
-| Camada | Tabelas geradas | Descrição |
-|----|----|----|
-| Bronze | `platfunc.aafn_ing.cotacoes_b3`, `platfunc.aafn_ing.series_bacen` | Captura dados brutos do Yahoo Finance (B3) e das séries temporais do BACEN (SGS). |
-| Bronze | `platfunc.aafn_ing.indices_futuros` | Captura dados brutos e **históricos** de índices globais via `brapi.dev`, expandindo `historicalDataPrice` em 1 linha por índice/dia, com metadados (região, categoria, 52w high/low) e `ingestion_timestamp`. |
-| Prata | `platfunc.aafn_tgt.cotacoes_b3`, `platfunc.aafn_tgt.series_bacen` | Padroniza esquemas, aplica validações (`dlt.expect`) e remove inconsistências. |
-| Prata | `platfunc.aafn_tgt.indices_futuros` | Normaliza o histórico diário dos índices globais, garantindo tipos consistentes (preços, volume, datas) e enriquecendo com taxonomia (`indice`, `regiao`, `categoria`). |
-| Ouro | `platfunc.aafn_ddm.metricas_b3`, `platfunc.aafn_ddm.indicadores_bacen` | Consolida KPIs das ações acompanhadas e um resumo das séries do BACEN. |
-| Ouro | `platfunc.aafn_ddm.indices_futuros_metricas` | Consolida métricas de desempenho dos índices globais (retornos, volatilidade, distâncias para 52w high/low, médias móveis etc.), prontas para consumo analítico. |
-
+| Camada | Tabelas geradas | Descrição resumida |
+|--------|------------------|--------------------|
+| **Bronze** | - `platfunc.aafn_ing.cotacoes_b3`  <br> - `platfunc.aafn_ing.series_bacen`  <br> - `platfunc.aafn_ing.indices_futuros` | - Captura dados **brutos** de cotações da B3 (Yahoo Finance). <br> - Captura dados **brutos** das séries temporais do BACEN (SGS). <br> - Captura dados **brutos e históricos** de índices globais via `brapi.dev`, expandindo `historicalDataPrice` em 1 linha por índice/dia, com metadados (região, categoria, 52w high/low) e `ingestion_timestamp`. |
+| **Prata** | - `platfunc.aafn_tgt.cotacoes_b3`  <br> - `platfunc.aafn_tgt.series_bacen`  <br> - `platfunc.aafn_tgt.indices_futuros` | - Padroniza esquemas e tipos de dados. <br> - Aplica validações de qualidade com `dlt.expect`. <br> - Remove inconsistências e registros inválidos. <br> - Normaliza o histórico diário dos índices globais, garantindo tipos consistentes (preços, volume, datas) e enriquecendo com taxonomia (`indice`, `regiao`, `categoria`). |
+| **Ouro** | - `platfunc.aafn_ddm.metricas_b3`  <br> - `platfunc.aafn_ddm.indicadores_bacen`  <br> - `platfunc.aafn_ddm.indices_futuros_metricas` | - Consolida KPIs das ações acompanhadas (B3). <br> - Gera um resumo consolidado das principais séries do BACEN. <br> - Consolida métricas de desempenho dos índices globais (retornos, volatilidade, distância para 52w high/low, médias móveis etc.), prontas para consumo analítico e dashboards. |
 ### Configuração de índices globais
 
 Os índices globais são configurados via um dicionário padrão em `utilitarios/configuracoes.py` (`INDICES_FUTUROS_PADRAO`), contendo:
