@@ -1,18 +1,20 @@
-"""Conexões e funções de captura de dados externos utilizados pelo pipeline - Versão Refatorada com brapi.dev e sgs."""
+"""Conexões e funções de captura de dados externos utilizados pelo pipeline
+- Versão Refatorada com brapi.dev e sgs.
+"""
 
 from __future__ import annotations
 
 import json
 import logging
 import os
+import time
+from datetime import datetime, timedelta
+from typing import Any, Dict, Iterable, List, Optional, Union
+
 import pandas as pd
 import requests
-import time
-
-from datetime import datetime, timedelta
-from typing import Dict, Iterable, List, Optional, Any, Union
-from pyspark.sql import DataFrame, SparkSession
 from pyspark.dbutils import DBUtils
+from pyspark.sql import DataFrame, SparkSession
 
 # Configuração do logger
 logger = logging.getLogger(__name__)
@@ -31,7 +33,7 @@ try:
     spark = SparkSession.active()
     logger.info("Sessão Spark obtida com sucesso do ambiente DLT")
 except Exception as e:
-    logger.error(f"Erro ao obter sessão Spark: {str(e)}")
+    logger.error("Erro ao obter sessão Spark: %s", str(e))
     raise
 
 # Importa biblioteca sgs para dados do BACEN
@@ -57,7 +59,7 @@ def _converter_data(
     except ValueError as e:
         raise ValueError(
             f"Formato de data inválido. Use {formato_entrada}. Erro: {str(e)}"
-        )
+        ) from e
 
 
 def buscar_historico_b3(
@@ -75,20 +77,20 @@ def buscar_historico_b3(
     - 15.000 requisições por mês
     """
     logger.info("=== INICIANDO BUSCA COM BRAPI.DEV ===")
-    logger.info(f"Tickers solicitados: {list(tickers)}")
-    logger.info(f"Período: {inicio} até {fim}")
+    logger.info("Tickers solicitados: %s", list(tickers))
+    logger.info("Período: %s até %s", inicio, fim)
 
     # Token da API
     dbutils = DBUtils(spark)
-    BRAPI_TOKEN = dbutils.secrets.get("brapi_scope", "BRAPI_TOKEN")
-    BASE_URL = "https://brapi.dev/api/quote"
+    brapi_token = api_key or dbutils.secrets.get("brapi_scope", "BRAPI_TOKEN")
+    base_url = "https://brapi.dev/api/quote"
 
     # Valida datas
     try:
         inicio_fmt = _converter_data(inicio)
         fim_fmt = _converter_data(fim)
     except ValueError as e:
-        logger.error(f"Erro ao validar datas: {str(e)}")
+        logger.error("Erro ao validar datas: %s", str(e))
         raise
 
     # Calcula diferença de dias
@@ -99,16 +101,22 @@ def buscar_historico_b3(
     # LIMITAÇÃO: Plano básico só permite 3 meses (90 dias)
     if dias_diferenca > 90:
         logger.warning(
-            f"⚠️ ATENÇÃO: Período solicitado ({dias_diferenca} dias) excede o limite do plano básico (90 dias)"
+            "⚠️ ATENÇÃO: Período solicitado (%d dias) excede o limite do "
+            "plano básico (90 dias)",
+            dias_diferenca,
         )
         logger.warning("Ajustando para buscar apenas os últimos 3 meses")
         data_inicio = data_fim - timedelta(days=90)
         inicio_fmt = data_inicio.strftime("%Y-%m-%d")
-        logger.info(f"Novo período: {data_inicio.strftime('%d/%m/%Y')} até {fim}")
+        logger.info(
+            "Novo período: %s até %s",
+            data_inicio.strftime("%d/%m/%Y"),
+            fim,
+        )
 
     # Define range para API (3mo = 3 meses)
     range_api = "3mo"
-    logger.info(f"Range calculado para API: {range_api}")
+    logger.info("Range calculado para API: %s", range_api)
 
     colunas = [
         "Date",
@@ -133,48 +141,61 @@ def buscar_historico_b3(
     tickers_list = list(tickers)
     total_tickers = len(tickers_list)
 
-    logger.info(f"Total de tickers a processar: {total_tickers}")
+    logger.info("Total de tickers a processar: %d", total_tickers)
     logger.info(
-        f"Requisições estimadas: {total_tickers} (1 por ticker - limitação do plano básico)"
+        "Requisições estimadas: %d (1 por ticker - limitação do plano básico)",
+        total_tickers,
     )
 
     # LIMITAÇÃO: Processar 1 ticker por vez (plano básico não permite múltiplos)
+    max_tentativas = 3
     for idx, ticker in enumerate(tickers_list):
         try:
             ticker_base = ticker.replace(".SA", "").upper()
-            logger.info(f"[{idx+1}/{total_tickers}] Processando: {ticker_base}")
+            logger.info("[%d/%d] Processando: %s", idx + 1, total_tickers, ticker_base)
 
             # Delay entre requisições para evitar rate limit
             if idx > 0:
                 delay = 2
-                logger.info(f"Aguardando {delay}s antes da próxima requisição...")
+                logger.info("Aguardando %ds antes da próxima requisição...", delay)
                 time.sleep(delay)
 
-            url = f"{BASE_URL}/{ticker_base}"
+            url = f"{base_url}/{ticker_base}"
             params = {
                 "range": range_api,
                 "interval": "1d",
                 "fundamental": "false",
-                "token": BRAPI_TOKEN,
+                "token": brapi_token,
             }
 
-            logger.info(f"Requisição: GET {url}")
-            logger.debug(f"Parâmetros: {params}")
+            logger.info("Requisição: GET %s", url)
+            logger.debug("Parâmetros: %s", params)
 
-            max_tentativas = 3
             tentativa = 0
-            resposta = None
+            resposta: Optional[requests.Response] = None
 
             while tentativa < max_tentativas:
                 tentativa += 1
                 try:
-                    logger.info(f"Tentativa {tentativa}/{max_tentativas}")
+                    logger.info("Tentativa %d/%d", tentativa, max_tentativas)
                     resposta = requests.get(url, params=params, timeout=30)
 
                     if resposta.status_code == 429:
-                        logger.warning("Rate limit atingido. Aguardando 10s...")
-                        time.sleep(10)
-                        continue
+                        if tentativa < max_tentativas:
+                            logger.warning(
+                                "Rate limit atingido. Aguardando 10s..."
+                            )
+                            time.sleep(10)
+                            continue
+
+                        erro_msg = (
+                            "Rate limit excedido para "
+                            f"{ticker_base} após {max_tentativas} tentativas"
+                        )
+                        logger.error(erro_msg)
+                        erros.append(erro_msg)
+                        resposta = None
+                        break
 
                     resposta.raise_for_status()
                     break
@@ -182,12 +203,14 @@ def buscar_historico_b3(
                 except requests.exceptions.HTTPError:
                     if resposta is not None and resposta.status_code == 429:
                         if tentativa < max_tentativas:
-                            logger.warning("Rate limit. Tentando novamente em 10s...")
+                            logger.warning(
+                                "Rate limit. Tentando novamente em 10s..."
+                            )
                             time.sleep(10)
                             continue
                         erro_msg = (
-                            f"Rate limit excedido para {ticker_base} "
-                            f"após {max_tentativas} tentativas"
+                            "Rate limit excedido para "
+                            f"{ticker_base} após {max_tentativas} tentativas"
                         )
                         logger.error(erro_msg)
                         erros.append(erro_msg)
@@ -199,7 +222,7 @@ def buscar_historico_b3(
                 continue
 
             dados = resposta.json()
-            logger.debug(f"Resposta recebida: {len(str(dados))} caracteres")
+            logger.debug("Resposta recebida: %d caracteres", len(str(dados)))
 
             if "results" not in dados or not dados["results"]:
                 aviso = f"Nenhum dado retornado para {ticker_base}"
@@ -220,12 +243,17 @@ def buscar_historico_b3(
 
             historico_data = resultado["historicalDataPrice"]
             logger.info(
-                f"Dados históricos encontrados: {len(historico_data)} registros"
+                "Dados históricos encontrados: %d registros",
+                len(historico_data),
             )
 
             df_historico = pd.DataFrame(historico_data)
 
-            df_historico["Date"] = pd.to_datetime(df_historico["date"], unit="s")
+            df_historico["Date"] = pd.to_datetime(
+                df_historico["date"],
+                unit="s",
+                errors="coerce",
+            )
 
             mapeamento_colunas = {
                 "open": "Open",
@@ -243,7 +271,8 @@ def buscar_historico_b3(
             df_historico = df_historico[colunas]
 
             df_historico = df_historico[
-                (df_historico["Date"] >= inicio_fmt) & (df_historico["Date"] <= fim_fmt)
+                (df_historico["Date"] >= inicio_fmt)
+                & (df_historico["Date"] <= fim_fmt)
             ]
 
             if df_historico.empty:
@@ -252,7 +281,11 @@ def buscar_historico_b3(
                 avisos.append(aviso)
                 continue
 
-            logger.info(f"✓ {ticker_base}: {len(df_historico)} registros processados")
+            logger.info(
+                "✓ %s: %d registros processados",
+                ticker_base,
+                len(df_historico),
+            )
             quadros.append(df_historico)
 
         except Exception as e:
@@ -262,21 +295,21 @@ def buscar_historico_b3(
             continue
 
     if avisos:
-        logger.warning(f"\n=== AVISOS DURANTE A BUSCA ({len(avisos)}) ===")
+        logger.warning("=== AVISOS DURANTE A BUSCA (%d) ===", len(avisos))
         for aviso in avisos:
-            logger.warning(f"  - {aviso}")
+            logger.warning("  - %s", aviso)
 
     if erros:
-        logger.error(f"\n=== ERROS DURANTE A BUSCA ({len(erros)}) ===")
+        logger.error("=== ERROS DURANTE A BUSCA (%d) ===", len(erros))
         for erro in erros:
-            logger.error(f"  - {erro}")
+            logger.error("  - %s", erro)
 
     if not quadros:
         logger.error("Nenhum dado encontrado para nenhum ticker!")
         return pd.DataFrame(columns=colunas)
 
-    logger.info("\n=== RESUMO ===")
-    logger.info(f"Tickers processados com sucesso: {len(quadros)}/{total_tickers}")
+    logger.info("=== RESUMO ===")
+    logger.info("Tickers processados com sucesso: %d/%d", len(quadros), total_tickers)
 
     resultado = pd.concat(quadros, ignore_index=True)
 
@@ -296,11 +329,13 @@ def buscar_historico_b3(
         resultado[col] = pd.to_numeric(resultado[col], errors="coerce")
         resultado[col] = resultado[col].fillna(0.0)
 
-    logger.info(f"Total de registros obtidos: {len(resultado)}")
+    logger.info("Total de registros obtidos: %d", len(resultado))
     logger.info(
-        f"Período coberto: {resultado['Date'].min()} até {resultado['Date'].max()}"
+        "Período coberto: %s até %s",
+        resultado["Date"].min(),
+        resultado["Date"].max(),
     )
-    logger.info("=== BUSCA FINALIZADA ===\n")
+    logger.info("=== BUSCA FINALIZADA ===")
 
     return resultado
 
@@ -310,9 +345,9 @@ def criar_dataframe_vazio(schema: Any) -> DataFrame:
     return spark.createDataFrame([], schema)
 
 
-# ============================================================================
+# ====
 # FUNÇÕES BACEN - REFATORADAS COM SGS
-# ============================================================================
+# ====
 
 
 def buscar_series_bacen(
@@ -324,11 +359,14 @@ def buscar_series_bacen(
     Busca séries temporais do BACEN usando a biblioteca sgs.
     """
     logger.info("=== INICIANDO BUSCA DE SÉRIES BACEN COM SGS ===")
-    logger.info(f"Séries solicitadas: {list(series.keys())}")
-    logger.info(f"Período: {inicio} até {fim}")
+    logger.info("Séries solicitadas: %s", list(series.keys()))
+    logger.info("Período: %s até %s", inicio, fim)
 
     if sgs is None:
-        erro_msg = "Biblioteca sgs não encontrada. " "Instale com: pip install sgs"
+        erro_msg = (
+            "Biblioteca sgs não encontrada. "
+            "Instale com: pip install sgs"
+        )
         logger.error(erro_msg)
         raise ModuleNotFoundError(erro_msg)
 
@@ -338,7 +376,7 @@ def buscar_series_bacen(
     except ValueError as e:
         erro_msg = f"Data deve estar no formato DD/MM/YYYY: {str(e)}"
         logger.error(erro_msg)
-        raise ValueError(erro_msg)
+        raise ValueError(erro_msg) from e
 
     if not series:
         logger.warning("Nenhuma série fornecida!")
@@ -349,7 +387,11 @@ def buscar_series_bacen(
 
     for nome_serie, codigo_serie in series.items():
         try:
-            logger.info(f"Buscando série '{nome_serie}' (código: {codigo_serie})")
+            logger.info(
+                "Buscando série '%s' (código: %s)",
+                nome_serie,
+                codigo_serie,
+            )
 
             serie_temporal = sgs.time_serie(
                 codigo_serie,
@@ -359,7 +401,9 @@ def buscar_series_bacen(
 
             if serie_temporal is None or serie_temporal.empty:
                 logger.warning(
-                    f"Nenhum dado retornado para '{nome_serie}' (código {codigo_serie})"
+                    "Nenhum dado retornado para '%s' (código %s)",
+                    nome_serie,
+                    codigo_serie,
                 )
                 erros.append(f"Nenhum dado retornado para {nome_serie}")
                 continue
@@ -378,16 +422,18 @@ def buscar_series_bacen(
 
             if antes > depois:
                 logger.warning(
-                    f"Removidas {antes - depois} linhas com dados inválidos de '{nome_serie}'"
+                    "Removidas %d linhas com dados inválidos de '%s'",
+                    antes - depois,
+                    nome_serie,
                 )
 
             if df_serie.empty:
-                logger.warning(f"Todos os dados de '{nome_serie}' eram inválidos")
+                logger.warning("Todos os dados de '%s' eram inválidos", nome_serie)
                 erros.append(f"Dados inválidos para série {nome_serie}")
                 continue
 
             quadros.append(df_serie)
-            logger.info(f"✓ {nome_serie}: {len(df_serie)} registros obtidos")
+            logger.info("✓ %s: %d registros obtidos", nome_serie, len(df_serie))
 
         except Exception as e:
             erro_msg = (
@@ -398,27 +444,32 @@ def buscar_series_bacen(
             continue
 
     if erros:
-        logger.warning(f"\n=== AVISOS DURANTE A BUSCA ({len(erros)}) ===")
+        logger.warning("=== AVISOS DURANTE A BUSCA (%d) ===", len(erros))
         for erro in erros:
-            logger.warning(f"  - {erro}")
+            logger.warning("  - %s", erro)
 
     if not quadros:
         logger.error("Nenhum dado encontrado para nenhuma série!")
         return pd.DataFrame(columns=["data", "valor", "serie"])
 
-    logger.info("\n=== CONSOLIDANDO RESULTADOS ===")
+    logger.info("=== CONSOLIDANDO RESULTADOS ===")
     resultado_final = pd.concat(quadros, ignore_index=True)
 
-    resultado_final = resultado_final.sort_values(["serie", "data"]).reset_index(
-        drop=True
-    )
+    resultado_final = resultado_final.sort_values(
+        ["serie", "data"],
+    ).reset_index(drop=True)
 
-    logger.info(f"✓ Total de registros obtidos: {len(resultado_final)}")
-    logger.info(f"✓ Séries com dados: {resultado_final['serie'].nunique()}")
+    logger.info("✓ Total de registros obtidos: %d", len(resultado_final))
     logger.info(
-        f"✓ Período coberto: {resultado_final['data'].min()} até {resultado_final['data'].max()}"
+        "✓ Séries com dados: %d",
+        resultado_final["serie"].nunique(),
     )
-    logger.info("=== BUSCA CONCLUÍDA COM SUCESSO ===\n")
+    logger.info(
+        "✓ Período coberto: %s até %s",
+        resultado_final["data"].min(),
+        resultado_final["data"].max(),
+    )
+    logger.info("=== BUSCA CONCLUÍDA COM SUCESSO ===")
 
     return resultado_final
 
@@ -442,17 +493,19 @@ def buscar_multiplas_series_bacen(
         datetime.strptime(inicio, "%d/%m/%Y")
         datetime.strptime(fim, "%d/%m/%Y")
     except ValueError as e:
-        raise ValueError(f"Data deve estar no formato DD/MM/YYYY: {str(e)}")
+        raise ValueError(
+            f"Data deve estar no formato DD/MM/YYYY: {str(e)}"
+        ) from e
 
     try:
         if isinstance(codigos_series, dict):
             codigos = list(codigos_series.values())
             nomes = list(codigos_series.keys())
-            logger.info(f"Buscando {len(codigos)} séries: {nomes}")
+            logger.info("Buscando %d séries: %s", len(codigos), nomes)
         else:
             codigos = codigos_series
             nomes = None
-            logger.info(f"Buscando {len(codigos)} séries: {codigos}")
+            logger.info("Buscando %d séries: %s", len(codigos), codigos)
 
         df = sgs.dataframe(
             codigos,
@@ -464,13 +517,13 @@ def buscar_multiplas_series_bacen(
             mapeamento = dict(zip(codigos, nomes))
             df.columns = [mapeamento.get(col, col) for col in df.columns]
 
-        logger.info(f"✓ {len(df)} registros obtidos para {len(df.columns)} séries")
-        logger.info(f"✓ Período: {df.index.min()} até {df.index.max()}")
+        logger.info("✓ %d registros obtidos para %d séries", len(df), len(df.columns))
+        logger.info("✓ Período: %s até %s", df.index.min(), df.index.max())
 
         return df
 
     except Exception as e:
-        logger.error(f"Erro ao buscar séries: {str(e)}")
+        logger.error("Erro ao buscar séries: %s", str(e))
         raise
 
 
@@ -485,39 +538,10 @@ def buscar_indices_futuros(
     """
     Busca HISTÓRICO de índices globais via brapi.dev, de forma incremental
     (um índice por vez), replicando a robustez de `buscar_historico_b3`.
-
-    Parâmetros
-    ----------
-    indices_config : dict
-        Dicionário no formato:
-        {
-            "IndSp500": {"ticker": "^GSPC", "regiao": "NA", "categoria": "Ações"},
-            ...
-        }
-    inicio, fim : str, opcional
-        Datas no formato DD/MM/YYYY. Se não informadas, usa apenas o range
-        da API (`range_periodo`) sem filtragem adicional.
-    range_periodo : str
-        Range a ser enviado para a API (default "3mo").
-        Quando `inicio`/`fim` são informados, o range efetivo é limitado
-        a 90 dias (plano básico) e utilizamos "3mo".
-    interval : str
-        Intervalo de candles ("1d", "1wk", etc.). Default "1d".
-    api_key : str, opcional
-        Token da API brapi.dev. Se não informado, usa DBUtils (brapi_scope).
-
-    Retorno
-    -------
-    pd.DataFrame com colunas:
-        [
-            "symbol","currency","shortName","longName","logourl",
-            "indice","regiao","categoria",
-            "fiftyTwoWeekLow","fiftyTwoWeekHigh",
-            "date","open","high","low","close","volume","adjustedClose",
-            "trade_date"
-        ]
     """
-    logger.info("=== INICIANDO BUSCA HISTÓRICA DE ÍNDICES GLOBAIS COM BRAPI.DEV ===")
+    logger.info(
+        "=== INICIANDO BUSCA HISTÓRICA DE ÍNDICES GLOBAIS COM BRAPI.DEV ==="
+    )
 
     # Colunas-alvo, alinhadas com a tabela bronze_indices_futuros
     colunas = [
@@ -547,8 +571,8 @@ def buscar_indices_futuros(
 
     # Token da API
     dbutils = DBUtils(spark)
-    BRAPI_TOKEN = api_key or dbutils.secrets.get("brapi_scope", "BRAPI_TOKEN")
-    BASE_URL = "https://brapi.dev/api/quote"
+    brapi_token = api_key or dbutils.secrets.get("brapi_scope", "BRAPI_TOKEN")
+    base_url = "https://brapi.dev/api/quote"
 
     # Controle de datas (opcional, mas com mesma lógica do buscar_historico_b3)
     inicio_fmt: Optional[str] = None
@@ -556,13 +580,13 @@ def buscar_indices_futuros(
     range_api = range_periodo  # padrão
 
     if inicio and fim:
-        logger.info(f"Período solicitado para índices: {inicio} até {fim}")
+        logger.info("Período solicitado para índices: %s até %s", inicio, fim)
 
         try:
             inicio_fmt = _converter_data(inicio)
             fim_fmt = _converter_data(fim)
         except ValueError as e:
-            logger.error(f"Erro ao validar datas para índices: {str(e)}")
+            logger.error("Erro ao validar datas para índices: %s", str(e))
             raise
 
         data_inicio = datetime.strptime(inicio, "%d/%m/%Y")
@@ -572,22 +596,27 @@ def buscar_indices_futuros(
         # Limite do plano básico (90 dias)
         if dias_diferenca > 90:
             logger.warning(
-                f"⚠️ ATENÇÃO: Período solicitado ({dias_diferenca} dias) "
-                f"excede o limite do plano básico (90 dias) para índices"
+                "⚠️ ATENÇÃO: Período solicitado (%d dias) excede o limite do "
+                "plano básico (90 dias) para índices",
+                dias_diferenca,
             )
             logger.warning("Ajustando para buscar apenas os últimos 3 meses")
             data_inicio = data_fim - timedelta(days=90)
             inicio_fmt = data_inicio.strftime("%Y-%m-%d")
             logger.info(
-                f"Novo período para índices: {data_inicio.strftime('%d/%m/%Y')} até {fim}"
+                "Novo período para índices: %s até %s",
+                data_inicio.strftime("%d/%m/%Y"),
+                fim,
             )
 
         # Para histórico, usamos 3 meses de qualquer forma (mesmo padrão da B3)
         range_api = "3mo"
     else:
         logger.info(
-            f"Nenhum período explícito informado para índices. "
-            f"Usando range='{range_api}' e interval='{interval}'."
+            "Nenhum período explícito informado para índices. "
+            "Usando range='%s' e interval='%s'.",
+            range_api,
+            interval,
         )
 
     quadros: List[pd.DataFrame] = []
@@ -597,10 +626,12 @@ def buscar_indices_futuros(
     indices_items = list(indices_config.items())
     total_indices = len(indices_items)
 
-    logger.info(f"Índices configurados: {total_indices}")
+    logger.info("Índices configurados: %d", total_indices)
     logger.info(
-        "Lista de índices (nome -> ticker): "
-        + ", ".join(f"{nome}={cfg.get('ticker','')}" for nome, cfg in indices_items)
+        "Lista de índices (nome -> ticker): %s",
+        ", ".join(
+            f"{nome}={cfg.get('ticker', '')}" for nome, cfg in indices_items
+        ),
     )
 
     delay_entre_requisicoes = 2
@@ -609,33 +640,40 @@ def buscar_indices_futuros(
     for idx, (nome_indice, cfg) in enumerate(indices_items, start=1):
         ticker = (cfg.get("ticker") or "").strip()
         if not ticker:
-            aviso = f"Índice '{nome_indice}' sem ticker configurado. Ignorando."
+            aviso = (
+                f"Índice '{nome_indice}' sem ticker configurado. Ignorando."
+            )
             logger.warning(aviso)
             avisos.append(aviso)
             continue
 
         symbol = ticker
         logger.info(
-            f"[{idx}/{total_indices}] Processando índice '{nome_indice}' (ticker={symbol})"
+            "[%d/%d] Processando índice '%s' (ticker=%s)",
+            idx,
+            total_indices,
+            nome_indice,
+            symbol,
         )
 
         # Delay para mitigar rate limit, igual à busca da B3
         if idx > 1:
             logger.info(
-                f"Aguardando {delay_entre_requisicoes}s antes da próxima requisição..."
+                "Aguardando %ds antes da próxima requisição...",
+                delay_entre_requisicoes,
             )
             time.sleep(delay_entre_requisicoes)
 
-        url = f"{BASE_URL}/{symbol}"
+        url = f"{base_url}/{symbol}"
         params = {
             "range": range_api,
             "interval": interval,
             "fundamental": "false",
-            "token": BRAPI_TOKEN,
+            "token": brapi_token,
         }
 
-        logger.info(f"Requisição: GET {url}")
-        logger.debug(f"Parâmetros: {params}")
+        logger.info("Requisição: GET %s", url)
+        logger.debug("Parâmetros: %s", params)
 
         tentativa = 0
         resposta: Optional[requests.Response] = None
@@ -645,7 +683,11 @@ def buscar_indices_futuros(
             tentativa += 1
             try:
                 logger.info(
-                    f"Tentativa {tentativa}/{max_tentativas} para índice {nome_indice} ({symbol})"
+                    "Tentativa %d/%d para índice %s (%s)",
+                    tentativa,
+                    max_tentativas,
+                    nome_indice,
+                    symbol,
                 )
                 resposta = requests.get(url, params=params, timeout=30)
 
@@ -653,7 +695,8 @@ def buscar_indices_futuros(
                 if resposta.status_code == 429:
                     if tentativa < max_tentativas:
                         logger.warning(
-                            "Rate limit atingido para %s. Aguardando 10s antes de tentar novamente...",
+                            "Rate limit atingido para %s. Aguardando 10s antes "
+                            "de tentar novamente...",
                             symbol,
                         )
                         time.sleep(10)
@@ -717,7 +760,10 @@ def buscar_indices_futuros(
 
         historico = item.get("historicalDataPrice") or []
         if not historico:
-            aviso = f"Sem dados históricos (historicalDataPrice) para {symbol}"
+            aviso = (
+                "Sem dados históricos (historicalDataPrice) para "
+                f"{symbol}"
+            )
             logger.warning(aviso)
             avisos.append(aviso)
             continue
@@ -745,7 +791,9 @@ def buscar_indices_futuros(
 
         # trade_date a partir de epoch (segundos)
         df_hist["trade_date"] = pd.to_datetime(
-            df_hist["date"], unit="s", errors="coerce"
+            df_hist["date"],
+            unit="s",
+            errors="coerce",
         )
 
         # Se inicio/fim foram informados, filtra pelo período (como em buscar_historico_b3)
@@ -812,12 +860,18 @@ def buscar_indices_futuros(
 
     # Resumo e consolidação, espelhando o padrão da função da B3
     if avisos:
-        logger.warning("\n=== AVISOS DURANTE A BUSCA DE ÍNDICES (%d) ===", len(avisos))
+        logger.warning(
+            "=== AVISOS DURANTE A BUSCA DE ÍNDICES (%d) ===",
+            len(avisos),
+        )
         for aviso in avisos:
             logger.warning("  - %s", aviso)
 
     if erros:
-        logger.error("\n=== ERROS DURANTE A BUSCA DE ÍNDICES (%d) ===", len(erros))
+        logger.error(
+            "=== ERROS DURANTE A BUSCA DE ÍNDICES (%d) ===",
+            len(erros),
+        )
         for erro in erros:
             logger.error("  - %s", erro)
 
@@ -829,7 +883,8 @@ def buscar_indices_futuros(
 
     # Tipagem final consistente
     resultado["trade_date"] = pd.to_datetime(
-        resultado["trade_date"], errors="coerce"
+        resultado["trade_date"],
+        errors="coerce",
     ).dt.date
 
     numericas_final = [
