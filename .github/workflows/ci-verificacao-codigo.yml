@@ -146,8 +146,10 @@ jobs:
         
     - name: Verificar imports (exceto Databricks)
       run: |
-        # Cria mocks para bibliotecas do Databricks
-        mkdir -p mock_libs
+        # Cria estrutura de pacotes mock para bibliotecas do Databricks
+        mkdir -p mock_libs/pyspark/sql
+        
+        # Mock do módulo dlt
         cat > mock_libs/dlt.py << 'EOF'
         """Mock do módulo dlt para validação local."""
         def table(*args, **kwargs):
@@ -182,49 +184,135 @@ jobs:
             pass
         EOF
         
-        cat > mock_libs/pyspark.py << 'EOF'
-        """Mock básico do PySpark para validação local."""
-        class sql:
-            class DataFrame:
+        # Mock do pyspark/__init__.py
+        cat > mock_libs/pyspark/__init__.py << 'EOF'
+        """Mock do pacote PySpark para validação local."""
+        __version__ = "3.5.0"
+        EOF
+        
+        # Mock do pyspark/sql/__init__.py
+        cat > mock_libs/pyspark/sql/__init__.py << 'EOF'
+        """Mock do módulo pyspark.sql para validação local."""
+
+        class DataFrame:
+            """Mock do DataFrame do PySpark."""
+            def __init__(self):
                 pass
             
-            class types:
-                class DataType:
-                    pass
-                
-                class StructType:
-                    def __init__(self, fields=None):
-                        self.fields = fields or []
-                
-                class StructField:
-                    def __init__(self, name, dataType, nullable=True):
-                        self.name = name
-                        self.dataType = dataType
-                        self.nullable = nullable
-                
-                class StringType(DataType):
-                    pass
-                
-                class IntegerType(DataType):
-                    pass
-                
-                class DoubleType(DataType):
-                    pass
-                
-                class TimestampType(DataType):
-                    pass
-                
-                class BooleanType(DataType):
-                    pass
+            def count(self):
+                return 0
+            
+            def repartition(self, *args):
+                return self
+            
+            def sortWithinPartitions(self, *args):
+                return self
+            
+            def select(self, *args):
+                return self
+            
+            def filter(self, *args):
+                return self
+            
+            def withColumn(self, *args):
+                return self
+            
+            def join(self, *args, **kwargs):
+                return self
+
+        class types:
+            """Mock dos tipos do PySpark."""
+            
+            class DataType:
+                pass
+            
+            class StructType:
+                def __init__(self, fields=None):
+                    self.fields = fields or []
+                    
+                def fieldNames(self):
+                    return [f.name for f in self.fields]
+            
+            class StructField:
+                def __init__(self, name, dataType, nullable=True):
+                    self.name = name
+                    self.dataType = dataType
+                    self.nullable = nullable
+            
+            class StringType(DataType):
+                pass
+            
+            class IntegerType(DataType):
+                pass
+            
+            class LongType(DataType):
+                pass
+            
+            class DoubleType(DataType):
+                pass
+            
+            class FloatType(DataType):
+                pass
+            
+            class TimestampType(DataType):
+                pass
+            
+            class DateType(DataType):
+                pass
+            
+            class BooleanType(DataType):
+                pass
+            
+            class ArrayType(DataType):
+                def __init__(self, elementType):
+                    self.elementType = elementType
+
+        # Alias para compatibilidade
+        T = types
+
+        class SparkSession:
+            """Mock da SparkSession."""
+            
+            def __init__(self):
+                pass
+            
+            def createDataFrame(self, data, schema=None):
+                return DataFrame()
+            
+            @property
+            def builder(self):
+                return self
+            
+            def appName(self, name):
+                return self
+            
+            def getOrCreate(self):
+                return self
+
+        # Instância global mock do spark
+        spark = SparkSession()
         EOF
         
         # Adiciona mocks ao PYTHONPATH e valida imports
         export PYTHONPATH="${PYTHONPATH}:$(pwd)/mock_libs"
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.bronze"
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.prata"
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.ouro"
-        python -c "import utilitarios.configuracoes"
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import utilitarios.fontes_dados"
+        
+        echo "Validando imports do módulo bronze..."
+        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.bronze; print('✅ bronze.py OK')"
+        
+        echo "Validando imports do módulo prata..."
+        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.prata; print('✅ prata.py OK')"
+        
+        echo "Validando imports do módulo ouro..."
+        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.ouro; print('✅ ouro.py OK')"
+        
+        echo "Validando imports do módulo configuracoes..."
+        python -c "import utilitarios.configuracoes; print('✅ configuracoes.py OK')"
+        
+        echo "Validando imports do módulo fontes_dados..."
+        python -c "import sys; sys.path.insert(0, 'mock_libs'); import utilitarios.fontes_dados; print('✅ fontes_dados.py OK')"
+        
+        echo "Validando imports do pipeline..."
+        python -c "import sys; sys.path.insert(0, 'mock_libs'); import pipelines.pipeline_financeiro; print('✅ pipeline_financeiro.py OK')"
 
   documentation-check:
     name: Verificação de Documentação
