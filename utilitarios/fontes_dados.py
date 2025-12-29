@@ -14,7 +14,6 @@ from typing import Dict, Iterable, List, Optional, Any, Union
 from pyspark.sql import DataFrame, SparkSession
 from pyspark.dbutils import DBUtils
 
-
 # Configuração do logger
 logger = logging.getLogger(__name__)
 logger.setLevel(logging.INFO)
@@ -24,7 +23,8 @@ console_handler = logging.StreamHandler()
 console_handler.setLevel(logging.INFO)
 formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
 console_handler.setFormatter(formatter)
-logger.addHandler(console_handler)
+if not logger.handlers:
+    logger.addHandler(console_handler)
 
 # Usa a sessão Spark existente do ambiente DLT
 try:
@@ -50,17 +50,6 @@ def _converter_data(
 ) -> str:
     """
     Converte data entre diferentes formatos.
-    
-    Args:
-        data: String representando a data
-        formato_entrada: Formato da data de entrada (default: DD/MM/YYYY)
-        formato_saida: Formato da data de saída (default: YYYY-MM-DD)
-    
-    Returns:
-        Data convertida no formato de saída
-    
-    Raises:
-        ValueError: Se a data estiver em formato inválido
     """
     try:
         return datetime.strptime(data, formato_entrada).strftime(formato_saida)
@@ -81,18 +70,6 @@ def buscar_historico_b3(
     - 1 ativo por requisição (não múltiplos)
     - Dados históricos de apenas 3 meses
     - 15.000 requisições por mês
-    
-    Args:
-        tickers: Lista de códigos de ações (ex: ["PETR4", "VALE3", "MGLU3"])
-        inicio: Data inicial no formato DD/MM/YYYY
-        fim: Data final no formato DD/MM/YYYY
-        api_key: Token da API brapi (opcional, usa token padrão se não fornecido)
-    
-    Returns:
-        DataFrame com histórico de preços
-    
-    Raises:
-        ValueError: Se as datas estiverem em formato inválido
     """
     logger.info("=== INICIANDO BUSCA COM BRAPI.DEV ===")
     logger.info(f"Tickers solicitados: {list(tickers)}")
@@ -166,11 +143,10 @@ def buscar_historico_b3(
             
             # Delay entre requisições para evitar rate limit
             if idx > 0:
-                delay = 2  # 2 segundos entre requisições
+                delay = 2
                 logger.info(f"Aguardando {delay}s antes da próxima requisição...")
                 time.sleep(delay)
             
-            # Monta URL para 1 ticker apenas (limitação do plano)
             url = f"{BASE_URL}/{ticker_base}"
             params = {
                 "range": range_api,
@@ -182,7 +158,6 @@ def buscar_historico_b3(
             logger.info(f"Requisição: GET {url}")
             logger.debug(f"Parâmetros: {params}")
             
-            # Faz requisição com retry
             max_tentativas = 3
             tentativa = 0
             resposta = None
@@ -225,7 +200,6 @@ def buscar_historico_b3(
             dados = resposta.json()
             logger.debug(f"Resposta recebida: {len(str(dados))} caracteres")
             
-            # Verifica estrutura da resposta
             if "results" not in dados or not dados["results"]:
                 aviso = f"Nenhum dado retornado para {ticker_base}"
                 logger.warning(aviso)
@@ -234,7 +208,6 @@ def buscar_historico_b3(
             
             resultado = dados["results"][0]
             
-            # Verifica se há dados históricos
             if (
                 "historicalDataPrice" not in resultado
                 or not resultado["historicalDataPrice"]
@@ -247,13 +220,10 @@ def buscar_historico_b3(
             historico_data = resultado["historicalDataPrice"]
             logger.info(f"Dados históricos encontrados: {len(historico_data)} registros")
             
-            # Converte para DataFrame
             df_historico = pd.DataFrame(historico_data)
             
-            # Converte timestamp para data
             df_historico["Date"] = pd.to_datetime(df_historico["date"], unit="s")
             
-            # Renomeia colunas para padrão
             mapeamento_colunas = {
                 "open": "Open",
                 "high": "High",
@@ -263,15 +233,12 @@ def buscar_historico_b3(
             }
             df_historico = df_historico.rename(columns=mapeamento_colunas)
             
-            # Adiciona colunas faltantes
             df_historico["Dividends"] = 0.0
             df_historico["Stock_Splits"] = 0.0
             df_historico["ticker"] = ticker_base
             
-            # Seleciona apenas colunas necessárias
             df_historico = df_historico[colunas]
             
-            # Filtra pelo período solicitado (se necessário)
             df_historico = df_historico[
                 (df_historico["Date"] >= inicio_fmt)
                 & (df_historico["Date"] <= fim_fmt)
@@ -292,7 +259,6 @@ def buscar_historico_b3(
             erros.append(erro_msg)
             continue
     
-    # Relatório final
     if avisos:
         logger.warning(f"\n=== AVISOS DURANTE A BUSCA ({len(avisos)}) ===")
         for aviso in avisos:
@@ -312,7 +278,6 @@ def buscar_historico_b3(
     
     resultado = pd.concat(quadros, ignore_index=True)
     
-    # Garante tipos de dados corretos
     resultado["Date"] = pd.to_datetime(resultado["Date"], errors="coerce")
     resultado = resultado.dropna(subset=["Date"])
     
@@ -354,35 +319,11 @@ def buscar_series_bacen(
 ) -> pd.DataFrame:
     """
     Busca séries temporais do BACEN usando a biblioteca sgs.
-    
-    Esta função substitui a implementação anterior com requests diretos,
-    utilizando a biblioteca sgs que oferece:
-    - Retry automático
-    - Cache de requisições
-    - Melhor tratamento de erros
-    - Interface mais simples
-    
-    Args:
-        series: Dicionário com nome da série como chave e código como valor
-                Exemplo: {"IPCA": 433, "CDI": 12, "SELIC": 432}
-        inicio: Data inicial no formato DD/MM/YYYY
-        fim: Data final no formato DD/MM/YYYY
-    
-    Returns:
-        DataFrame com colunas:
-        - data: Data da observação
-        - valor: Valor da série temporal
-        - serie: Nome da série
-    
-    Raises:
-        ValueError: Se as datas estiverem em formato inválido
-        ModuleNotFoundError: Se a biblioteca sgs não estiver instalada
     """
     logger.info("=== INICIANDO BUSCA DE SÉRIES BACEN COM SGS ===")
     logger.info(f"Séries solicitadas: {list(series.keys())}")
     logger.info(f"Período: {inicio} até {fim}")
     
-    # Verifica se a biblioteca sgs está disponível
     if sgs is None:
         erro_msg = (
             "Biblioteca sgs não encontrada. "
@@ -391,7 +332,6 @@ def buscar_series_bacen(
         logger.error(erro_msg)
         raise ModuleNotFoundError(erro_msg)
     
-    # Valida formato das datas
     try:
         datetime.strptime(inicio, "%d/%m/%Y")
         datetime.strptime(fim, "%d/%m/%Y")
@@ -400,7 +340,6 @@ def buscar_series_bacen(
         logger.error(erro_msg)
         raise ValueError(erro_msg)
     
-    # Valida que há séries para buscar
     if not series:
         logger.warning("Nenhuma série fornecida!")
         return pd.DataFrame(columns=["data", "valor", "serie"])
@@ -408,7 +347,6 @@ def buscar_series_bacen(
     quadros: List[pd.DataFrame] = []
     erros: List[str] = []
     
-    # Processa cada série individualmente
     for nome_serie, codigo_serie in series.items():
         try:
             logger.info(f"Buscando série '{nome_serie}' (código: {codigo_serie})")
@@ -419,7 +357,6 @@ def buscar_series_bacen(
                 end=fim,
             )
             
-            # Verifica se retornou dados
             if serie_temporal is None or serie_temporal.empty:
                 logger.warning(
                     f"Nenhum dado retornado para '{nome_serie}' (código {codigo_serie})"
@@ -427,19 +364,14 @@ def buscar_series_bacen(
                 erros.append(f"Nenhum dado retornado para {nome_serie}")
                 continue
             
-            # Converte Series do pandas para DataFrame
             df_serie = serie_temporal.to_frame(name="valor")
             df_serie = df_serie.reset_index()
             df_serie.columns = ["data", "valor"]
-            
-            # Adiciona nome da série
             df_serie["serie"] = nome_serie
             
-            # Garante tipos corretos
             df_serie["data"] = pd.to_datetime(df_serie["data"], errors="coerce")
             df_serie["valor"] = pd.to_numeric(df_serie["valor"], errors="coerce")
             
-            # Remove linhas com dados inválidos
             antes = len(df_serie)
             df_serie = df_serie.dropna(subset=["data", "valor"])
             depois = len(df_serie)
@@ -465,13 +397,11 @@ def buscar_series_bacen(
             erros.append(erro_msg)
             continue
     
-    # Reporta erros
     if erros:
         logger.warning(f"\n=== AVISOS DURANTE A BUSCA ({len(erros)}) ===")
         for erro in erros:
             logger.warning(f"  - {erro}")
     
-    # Consolida resultados
     if not quadros:
         logger.error("Nenhum dado encontrado para nenhuma série!")
         return pd.DataFrame(columns=["data", "valor", "serie"])
@@ -479,7 +409,6 @@ def buscar_series_bacen(
     logger.info("\n=== CONSOLIDANDO RESULTADOS ===")
     resultado_final = pd.concat(quadros, ignore_index=True)
     
-    # Ordenação final
     resultado_final = resultado_final.sort_values(["serie", "data"]).reset_index(
         drop=True
     )
@@ -503,30 +432,14 @@ def buscar_multiplas_series_bacen(
 ) -> pd.DataFrame:
     """
     Busca múltiplas séries do BACEN de forma otimizada usando sgs.dataframe.
-    
-    Esta função é mais eficiente quando você precisa buscar várias séries
-    simultaneamente, pois usa sgs.dataframe que faz requisições em paralelo.
-    
-    Args:
-        codigos_series: Lista de códigos ou dicionário {nome: código}
-                       Exemplo: [433, 12, 432] ou {"IPCA": 433, "CDI": 12}
-        inicio: Data inicial no formato DD/MM/YYYY
-        fim: Data final no formato DD/MM/YYYY
-    
-    Returns:
-        DataFrame com as séries em colunas (formato wide)
-        - Index: Datas
-        - Colunas: Códigos ou nomes das séries
     """
     logger.info("=== BUSCA OTIMIZADA DE MÚLTIPLAS SÉRIES BACEN ===")
     
-    # Verifica se a biblioteca sgs está disponível
     if sgs is None:
         raise ModuleNotFoundError(
             "Biblioteca sgs não encontrada. Instale com: pip install sgs"
         )
     
-    # Valida datas
     try:
         datetime.strptime(inicio, "%d/%m/%Y")
         datetime.strptime(fim, "%d/%m/%Y")
@@ -534,7 +447,6 @@ def buscar_multiplas_series_bacen(
         raise ValueError(f"Data deve estar no formato DD/MM/YYYY: {str(e)}")
     
     try:
-        # Se for dicionário, extrai os códigos
         if isinstance(codigos_series, dict):
             codigos = list(codigos_series.values())
             nomes = list(codigos_series.keys())
@@ -544,16 +456,13 @@ def buscar_multiplas_series_bacen(
             nomes = None
             logger.info(f"Buscando {len(codigos)} séries: {codigos}")
         
-        # Usa sgs.dataframe para buscar múltiplas séries de uma vez
         df = sgs.dataframe(
             codigos,
             start=inicio,
             end=fim,
         )
         
-        # Se temos nomes personalizados, renomeia as colunas
         if nomes:
-            # Cria mapeamento de código para nome
             mapeamento = dict(zip(codigos, nomes))
             df.columns = [mapeamento.get(col, col) for col in df.columns]
         
@@ -569,261 +478,395 @@ def buscar_multiplas_series_bacen(
 
 def buscar_indices_futuros(
     indices_config: Dict[str, Dict[str, str]],
+    inicio: Optional[str] = None,
+    fim: Optional[str] = None,
+    range_periodo: str = "3mo",
+    interval: str = "1d",
     api_key: Optional[str] = None,
 ) -> pd.DataFrame:
     """
-    Busca cotações atuais de derivativos de índices globais usando a API brapi.dev.
-    
-    Mantém o schema original da API (camada bronze), enriquecendo com:
-    - indice: identificador lógico (ex: IndSp500, IndBovespa)
-    - regiao: região macro (US, BR, EU, APAC, MEA)
-    - categoria: tipo de índice (equity_index, reit_index, volatility_index, etc.)
-    
-    Args:
-        indices_config:
-            Dicionário com configuração dos índices futuros:
-            {
-                "IndSp500": {"ticker": "^GSPC", "regiao": "US", "categoria": "equity_index"},
-                ...
-            }
-        api_key:
-            Token da API brapi (opcional, usa token padrão se não fornecido)
-    
-    Returns:
-        DataFrame com uma linha por índice contendo:
-        - currency, shortName, longName
-        - regularMarketChange, regularMarketChangePercent
-        - regularMarketTime, regularMarketPrice
-        - regularMarketDayHigh, regularMarketDayLow, regularMarketDayRange
-        - regularMarketPreviousClose, regularMarketOpen, regularMarketVolume
-        - fiftyTwoWeekRange, fiftyTwoWeekLow, fiftyTwoWeekHigh
-        - symbol, logourl
-        - indice, regiao, categoria
-    """
-    logger.info("=== INICIANDO BUSCA DE ÍNDICES FUTUROS COM BRAPI.DEV ===")
-    
-    if not indices_config:
-        logger.warning("Nenhum índice futuro configurado.")
-        colunas = [
-            "currency",
-            "shortName",
-            "longName",
-            "regularMarketChange",
-            "regularMarketChangePercent",
-            "regularMarketTime",
-            "regularMarketPrice",
-            "regularMarketDayHigh",
-            "regularMarketDayLow",
-            "regularMarketDayRange",
-            "regularMarketPreviousClose",
-            "regularMarketOpen",
-            "regularMarketVolume",
-            "fiftyTwoWeekRange",
-            "fiftyTwoWeekLow",
-            "fiftyTwoWeekHigh",
-            "symbol",
-            "logourl",
-            "indice",
-            "regiao",
-            "categoria",
+    Busca HISTÓRICO de índices globais via brapi.dev, de forma incremental
+    (um índice por vez), replicando a robustez de `buscar_historico_b3`.
+
+    Parâmetros
+    ----------
+    indices_config : dict
+        Dicionário no formato:
+        {
+            "IndSp500": {"ticker": "^GSPC", "regiao": "NA", "categoria": "Ações"},
+            ...
+        }
+    inicio, fim : str, opcional
+        Datas no formato DD/MM/YYYY. Se não informadas, usa apenas o range
+        da API (`range_periodo`) sem filtragem adicional.
+    range_periodo : str
+        Range a ser enviado para a API (default "3mo").
+        Quando `inicio`/`fim` são informados, o range efetivo é limitado
+        a 90 dias (plano básico) e utilizamos "3mo".
+    interval : str
+        Intervalo de candles ("1d", "1wk", etc.). Default "1d".
+    api_key : str, opcional
+        Token da API brapi.dev. Se não informado, usa DBUtils (brapi_scope).
+
+    Retorno
+    -------
+    pd.DataFrame com colunas:
+        [
+            "symbol","currency","shortName","longName","logourl",
+            "indice","regiao","categoria",
+            "fiftyTwoWeekLow","fiftyTwoWeekHigh",
+            "date","open","high","low","close","volume","adjustedClose",
+            "trade_date"
         ]
-        return pd.DataFrame(columns=colunas)
-    
-    BRAPI_TOKEN = api_key or "bskwmkRoxVSMKPwR5HHUSE"
-    BASE_URL = "https://brapi.dev/api/quote"
-    
+    """
+    logger.info("=== INICIANDO BUSCA HISTÓRICA DE ÍNDICES GLOBAIS COM BRAPI.DEV ===")
+
+    # Colunas-alvo, alinhadas com a tabela bronze_indices_futuros
     colunas = [
+        "symbol",
         "currency",
         "shortName",
         "longName",
-        "regularMarketChange",
-        "regularMarketChangePercent",
-        "regularMarketTime",
-        "regularMarketPrice",
-        "regularMarketDayHigh",
-        "regularMarketDayLow",
-        "regularMarketDayRange",
-        "regularMarketPreviousClose",
-        "regularMarketOpen",
-        "regularMarketVolume",
-        "fiftyTwoWeekRange",
-        "fiftyTwoWeekLow",
-        "fiftyTwoWeekHigh",
-        "symbol",
         "logourl",
         "indice",
         "regiao",
         "categoria",
+        "fiftyTwoWeekLow",
+        "fiftyTwoWeekHigh",
+        "date",
+        "open",
+        "high",
+        "low",
+        "close",
+        "volume",
+        "adjustedClose",
+        "trade_date",
     ]
-    
+
+    if not indices_config:
+        logger.warning("Nenhum índice futuro configurado.")
+        return pd.DataFrame(columns=colunas)
+
+    # Token da API
+    dbutils = DBUtils(spark)
+    BRAPI_TOKEN = api_key or dbutils.secrets.get("brapi_scope", "BRAPI_TOKEN")
+    BASE_URL = "https://brapi.dev/api/quote"
+
+    # Controle de datas (opcional, mas com mesma lógica do buscar_historico_b3)
+    inicio_fmt: Optional[str] = None
+    fim_fmt: Optional[str] = None
+    range_api = range_periodo  # padrão
+
+    if inicio and fim:
+        logger.info(f"Período solicitado para índices: {inicio} até {fim}")
+
+        try:
+            inicio_fmt = _converter_data(inicio)
+            fim_fmt = _converter_data(fim)
+        except ValueError as e:
+            logger.error(f"Erro ao validar datas para índices: {str(e)}")
+            raise
+
+        data_inicio = datetime.strptime(inicio, "%d/%m/%Y")
+        data_fim = datetime.strptime(fim, "%d/%m/%Y")
+        dias_diferenca = (data_fim - data_inicio).days
+
+        # Limite do plano básico (90 dias)
+        if dias_diferenca > 90:
+            logger.warning(
+                f"⚠️ ATENÇÃO: Período solicitado ({dias_diferenca} dias) "
+                f"excede o limite do plano básico (90 dias) para índices"
+            )
+            logger.warning("Ajustando para buscar apenas os últimos 3 meses")
+            data_inicio = data_fim - timedelta(days=90)
+            inicio_fmt = data_inicio.strftime("%Y-%m-%d")
+            logger.info(
+                f"Novo período para índices: {data_inicio.strftime('%d/%m/%Y')} até {fim}"
+            )
+
+        # Para histórico, usamos 3 meses de qualquer forma (mesmo padrão da B3)
+        range_api = "3mo"
+    else:
+        logger.info(
+            f"Nenhum período explícito informado para índices. "
+            f"Usando range='{range_api}' e interval='{interval}'."
+        )
+
     quadros: List[pd.DataFrame] = []
     erros: List[str] = []
     avisos: List[str] = []
-    
-    total_indices = len(indices_config)
-    logger.info(f"Índices futuros configurados: {total_indices}")
-    
-    for idx, (nome_indice, meta) in enumerate(indices_config.items()):
-        try:
-            ticker = meta.get("ticker")
-            regiao = meta.get("regiao")
-            categoria = meta.get("categoria")
-            
-            if not ticker:
-                logger.warning(f"Ticker não definido para índice {nome_indice}, ignorando.")
-                continue
-            
+
+    indices_items = list(indices_config.items())
+    total_indices = len(indices_items)
+
+    logger.info(f"Índices configurados: {total_indices}")
+    logger.info(
+        "Lista de índices (nome -> ticker): "
+        + ", ".join(
+            f"{nome}={cfg.get('ticker','')}" for nome, cfg in indices_items
+        )
+    )
+
+    delay_entre_requisicoes = 2
+    max_tentativas = 3
+
+    for idx, (nome_indice, cfg) in enumerate(indices_items, start=1):
+        ticker = (cfg.get("ticker") or "").strip()
+        if not ticker:
+            aviso = f"Índice '{nome_indice}' sem ticker configurado. Ignorando."
+            logger.warning(aviso)
+            avisos.append(aviso)
+            continue
+
+        symbol = ticker
+        logger.info(
+            f"[{idx}/{total_indices}] Processando índice '{nome_indice}' (ticker={symbol})"
+        )
+
+        # Delay para mitigar rate limit, igual à busca da B3
+        if idx > 1:
             logger.info(
-                f"[{idx+1}/{total_indices}] Buscando {nome_indice} ({ticker}) "
-                f"- Região: {regiao} - Categoria: {categoria}"
+                f"Aguardando {delay_entre_requisicoes}s antes da próxima requisição..."
             )
-            
-            if idx > 0:
-                # Atraso simples para evitar rate limit
-                time.sleep(2)
-            
-            url = f"{BASE_URL}/{ticker}"
-            params = {"token": BRAPI_TOKEN}
-            
-            max_tentativas = 3
-            tentativa = 0
-            resposta = None
-            
-            while tentativa < max_tentativas:
-                tentativa += 1
-                try:
-                    logger.info(f"Tentativa {tentativa}/{max_tentativas} para {nome_indice}")
-                    resposta = requests.get(url, params=params, timeout=30)
-                    
-                    if resposta.status_code == 429:
-                        logger.warning("Rate limit atingido. Aguardando 10s...")
+            time.sleep(delay_entre_requisicoes)
+
+        url = f"{BASE_URL}/{symbol}"
+        params = {
+            "range": range_api,
+            "interval": interval,
+            "fundamental": "false",
+            "token": BRAPI_TOKEN,
+        }
+
+        logger.info(f"Requisição: GET {url}")
+        logger.debug(f"Parâmetros: {params}")
+
+        tentativa = 0
+        resposta: Optional[requests.Response] = None
+
+        # Loop de tentativas com tratamento explícito de rate limit e HTTPError
+        while tentativa < max_tentativas:
+            tentativa += 1
+            try:
+                logger.info(
+                    f"Tentativa {tentativa}/{max_tentativas} para índice {nome_indice} ({symbol})"
+                )
+                resposta = requests.get(url, params=params, timeout=30)
+
+                # Rate limit (HTTP 429)
+                if resposta.status_code == 429:
+                    if tentativa < max_tentativas:
+                        logger.warning(
+                            "Rate limit atingido para %s. Aguardando 10s antes de tentar novamente...",
+                            symbol,
+                        )
                         time.sleep(10)
                         continue
-                    
-                    resposta.raise_for_status()
+
+                    erro_msg = (
+                        f"Rate limit excedido para {symbol} após "
+                        f"{max_tentativas} tentativas"
+                    )
+                    logger.error(erro_msg)
+                    erros.append(erro_msg)
+                    resposta = None
                     break
-                except requests.exceptions.HTTPError:
-                    if resposta is not None and resposta.status_code == 429:
-                        if tentativa < max_tentativas:
-                            logger.warning("Rate limit. Tentando novamente em 10s...")
-                            time.sleep(10)
-                            continue
-                        erro_msg = (
-                            f"Rate limit excedido para {nome_indice} "
-                            f"após {max_tentativas} tentativas"
-                        )
-                        logger.error(erro_msg)
-                        erros.append(erro_msg)
-                        break
-                    raise
-            
-            if not resposta or resposta.status_code != 200:
-                erros.append(f"Falha ao buscar {nome_indice}")
-                continue
-            
+
+                resposta.raise_for_status()
+                break  # Sucesso, sai do loop
+
+            except requests.exceptions.HTTPError as http_err:
+                if resposta is not None and resposta.status_code == 404:
+                    aviso = (
+                        f"Ticker {symbol} não encontrado (404). "
+                        f"Índice '{nome_indice}' será ignorado."
+                    )
+                    logger.warning(aviso)
+                    avisos.append(aviso)
+                    resposta = None
+                    break
+
+                erro_msg = f"HTTPError ao buscar {symbol}: {http_err}"
+                logger.error(erro_msg)
+                erros.append(erro_msg)
+                resposta = None
+                break
+
+            except Exception as e:
+                erro_msg = f"Erro de conexão ao buscar {symbol}: {e}"
+                logger.error(erro_msg, exc_info=True)
+                erros.append(erro_msg)
+                resposta = None
+                break
+
+        if not resposta or resposta.status_code != 200:
+            continue
+
+        # Parse JSON e validações básicas
+        try:
             dados = resposta.json()
-            if "results" not in dados or not dados["results"]:
-                aviso = f"Nenhum dado retornado para {nome_indice}"
-                logger.warning(aviso)
-                avisos.append(aviso)
-                continue
-            
-            resultado = dados["results"][0]
-            
-            # Monta registro alinhado ao schema original da API + taxonomia
-            registro = {
-                "currency": resultado.get("currency"),
-                "shortName": resultado.get("shortName"),
-                "longName": resultado.get("longName"),
-                "regularMarketChange": resultado.get("regularMarketChange"),
-                "regularMarketChangePercent": resultado.get(
-                    "regularMarketChangePercent"
-                ),
-                "regularMarketTime": resultado.get("regularMarketTime"),
-                "regularMarketPrice": resultado.get("regularMarketPrice"),
-                "regularMarketDayHigh": resultado.get("regularMarketDayHigh"),
-                "regularMarketDayLow": resultado.get("regularMarketDayLow"),
-                "regularMarketDayRange": resultado.get("regularMarketDayRange"),
-                "regularMarketPreviousClose": resultado.get(
-                    "regularMarketPreviousClose"
-                ),
-                "regularMarketOpen": resultado.get("regularMarketOpen"),
-                "regularMarketVolume": resultado.get("regularMarketVolume"),
-                "fiftyTwoWeekRange": resultado.get("fiftyTwoWeekRange"),
-                "fiftyTwoWeekLow": resultado.get("fiftyTwoWeekLow"),
-                "fiftyTwoWeekHigh": resultado.get("fiftyTwoWeekHigh"),
-                "symbol": resultado.get("symbol"),
-                "logourl": resultado.get("logourl"),
-                "indice": nome_indice,
-                "regiao": regiao,
-                "categoria": categoria,
-            }
-            
-            df_indice = pd.DataFrame([registro])
-            quadros.append(df_indice)
-            
-            logger.info(
-                f"✓ {nome_indice}: preço {registro['regularMarketPrice']} "
-                f"{registro['currency']}"
-            )
-        
-        except Exception as e:
-            erro_msg = f"Erro ao processar índice {nome_indice}: {str(e)}"
-            logger.error(erro_msg, exc_info=True)
+        except json.JSONDecodeError as e:
+            erro_msg = f"Resposta JSON inválida para {symbol}: {e}"
+            logger.error(erro_msg)
             erros.append(erro_msg)
             continue
-    
-    if avisos:
-        logger.warning(f"\n=== AVISOS DURANTE A BUSCA ({len(avisos)}) ===")
-        for aviso in avisos:
-            logger.warning(f"  - {aviso}")
-    
-    if erros:
-        logger.error(f"\n=== ERROS DURANTE A BUSCA ({len(erros)}) ===")
-        for erro in erros:
-            logger.error(f"  - {erro}")
-    
-    if not quadros:
-        logger.error("Nenhum dado obtido para índices futuros.")
-        return pd.DataFrame(columns=colunas)
-    
-    resultado = pd.concat(quadros, ignore_index=True)
-    
-    # Conversão básica de tipos
-    if "regularMarketTime" in resultado.columns:
-        resultado["regularMarketTime"] = pd.to_datetime(
-            resultado["regularMarketTime"], errors="coerce"
+
+        if "results" not in dados or not dados["results"]:
+            aviso = f"Nenhum resultado retornado para {symbol}"
+            logger.warning(aviso)
+            avisos.append(aviso)
+            continue
+
+        item = dados["results"][0]
+
+        historico = item.get("historicalDataPrice") or []
+        if not historico:
+            aviso = f"Sem dados históricos (historicalDataPrice) para {symbol}"
+            logger.warning(aviso)
+            avisos.append(aviso)
+            continue
+
+        df_hist = pd.DataFrame(historico)
+        if df_hist.empty:
+            aviso = f"historicalDataPrice vazio para {symbol}"
+            logger.warning(aviso)
+            avisos.append(aviso)
+            continue
+
+        # Garante colunas essenciais de preço/volume
+        colunas_hist = [
+            "date",
+            "open",
+            "high",
+            "low",
+            "close",
+            "volume",
+            "adjustedClose",
+        ]
+        for col in colunas_hist:
+            if col not in df_hist.columns:
+                df_hist[col] = None
+
+        # trade_date a partir de epoch (segundos)
+        df_hist["trade_date"] = pd.to_datetime(
+            df_hist["date"], unit="s", errors="coerce"
         )
-    
-    colunas_numericas = [
-        "regularMarketChange",
-        "regularMarketChangePercent",
-        "regularMarketPrice",
-        "regularMarketDayHigh",
-        "regularMarketDayLow",
-        "regularMarketPreviousClose",
-        "regularMarketOpen",
-        "regularMarketVolume",
+
+        # Se inicio/fim foram informados, filtra pelo período (como em buscar_historico_b3)
+        if inicio_fmt and fim_fmt:
+            df_hist = df_hist[
+                (df_hist["trade_date"] >= inicio_fmt)
+                & (df_hist["trade_date"] <= fim_fmt)
+            ]
+
+        if df_hist.empty:
+            aviso = f"Nenhum dado histórico no período para {symbol}"
+            logger.warning(aviso)
+            avisos.append(aviso)
+            continue
+
+        # Enriquecimento com metadados do índice e taxonomia local
+        df_hist["symbol"] = item.get("symbol") or symbol
+        df_hist["currency"] = item.get("currency")
+        df_hist["shortName"] = item.get("shortName")
+        df_hist["longName"] = item.get("longName")
+        df_hist["logourl"] = item.get("logourl")
+
+        df_hist["indice"] = nome_indice
+        df_hist["regiao"] = cfg.get("regiao")
+        df_hist["categoria"] = cfg.get("categoria")
+
+        df_hist["fiftyTwoWeekLow"] = item.get("fiftyTwoWeekLow")
+        df_hist["fiftyTwoWeekHigh"] = item.get("fiftyTwoWeekHigh")
+
+        # Conversões explícitas de tipos (numéricos)
+        numericas = [
+            "open",
+            "high",
+            "low",
+            "close",
+            "adjustedClose",
+            "volume",
+            "fiftyTwoWeekLow",
+            "fiftyTwoWeekHigh",
+        ]
+        for col in numericas:
+            df_hist[col] = pd.to_numeric(df_hist[col], errors="coerce")
+
+        # Volume: garante zero para nulos, para evitar problemas de tipagem depois
+        df_hist["volume"] = df_hist["volume"].fillna(0)
+
+        # trade_date como date puro (YYYY-MM-DD), alinhado com o schema da Bronze
+        df_hist["trade_date"] = df_hist["trade_date"].dt.date
+
+        # Garante que todas as colunas existam e na ordem correta
+        for col in colunas:
+            if col not in df_hist.columns:
+                df_hist[col] = None
+
+        df_hist = df_hist[colunas]
+
+        logger.info(
+            "✓ %s (%s): %d registros históricos processados",
+            nome_indice,
+            symbol,
+            len(df_hist),
+        )
+        quadros.append(df_hist)
+
+    # Resumo e consolidação, espelhando o padrão da função da B3
+    if avisos:
+        logger.warning(
+            "\n=== AVISOS DURANTE A BUSCA DE ÍNDICES (%d) ===", len(avisos)
+        )
+        for aviso in avisos:
+            logger.warning("  - %s", aviso)
+
+    if erros:
+        logger.error(
+            "\n=== ERROS DURANTE A BUSCA DE ÍNDICES (%d) ===", len(erros)
+        )
+        for erro in erros:
+            logger.error("  - %s", erro)
+
+    if not quadros:
+        logger.error("Nenhum dado obtido para índices globais.")
+        return pd.DataFrame(columns=colunas)
+
+    resultado = pd.concat(quadros, ignore_index=True)
+
+    # Tipagem final consistente
+    resultado["trade_date"] = pd.to_datetime(
+        resultado["trade_date"], errors="coerce"
+    ).dt.date
+
+    numericas_final = [
+        "open",
+        "high",
+        "low",
+        "close",
+        "adjustedClose",
+        "volume",
         "fiftyTwoWeekLow",
         "fiftyTwoWeekHigh",
     ]
-    for col in colunas_numericas:
-        if col in resultado.columns:
-            resultado[col] = pd.to_numeric(resultado[col], errors="coerce")
-    
+    for col in numericas_final:
+        resultado[col] = pd.to_numeric(resultado[col], errors="coerce")
+
     logger.info(
-        f"Total de índices futuros obtidos: {len(resultado)} "
-        f"({resultado['indice'].nunique()} identificadores lógicos)"
+        "Total de registros históricos de índices: %d (%d símbolos)",
+        len(resultado),
+        resultado["symbol"].nunique(),
     )
-    
-    return resultado[colunas]
+
+    return resultado
 
 
 __all__ = [
-    "BrapiClient",
     "buscar_historico_b3",
     "buscar_series_bacen",
     "buscar_multiplas_series_bacen",
     "buscar_indices_futuros",
     "criar_dataframe_vazio",
+    "spark",
 ]
