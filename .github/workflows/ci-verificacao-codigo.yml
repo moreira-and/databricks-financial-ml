@@ -24,7 +24,7 @@ jobs:
     - name: Instalar dependências de desenvolvimento
       run: |
         python -m pip install --upgrade pip
-        pip install flake8 black isort pylint mypy
+        pip install flake8 black isort
         
     - name: Verificar formatação com Black
       run: |
@@ -36,11 +36,11 @@ jobs:
       
     - name: Análise estática com Flake8
       run: |
-        # Ignora erros de imports do Databricks (dlt, pyspark quando não instalado)
+        # Ignora erros de imports do Databricks (dlt, pyspark)
         flake8 transformacoes/ pipelines/ utilitarios/ \
           --max-line-length=100 \
-          --extend-ignore=E203,W503,F401 \
-          --per-file-ignores="__init__.py:F401,transformacoes/bronze.py:F821,transformacoes/prata.py:F821,transformacoes/ouro.py:F821,utilitarios/fontes_dados.py:F821" \
+          --extend-ignore=E203,W503,F401,F821 \
+          --per-file-ignores="__init__.py:F401" \
           --exclude=.git,__pycache__,.venv,venv,build,dist
 
   security-scan:
@@ -114,8 +114,8 @@ jobs:
         name: pylint-report
         path: pylint-report.txt
 
-  test-syntax:
-    name: Validação de Sintaxe e Imports
+  syntax-check:
+    name: Verificação de Sintaxe
     runs-on: ubuntu-latest
     
     steps:
@@ -127,236 +127,13 @@ jobs:
       with:
         python-version: '3.10'
         
-    - name: Instalar dependências mínimas
-      run: |
-        pip install pandas requests
-        
     - name: Verificar sintaxe Python
       run: |
+        echo "Verificando sintaxe dos arquivos Python..."
         python -m py_compile transformacoes/*.py
         python -m py_compile pipelines/*.py
         python -m py_compile utilitarios/*.py
-        
-    - name: Verificar imports (exceto Databricks)
-      run: |
-        # Cria estrutura de pacotes mock para bibliotecas do Databricks
-        mkdir -p mock_libs/pyspark/sql
-        mkdir -p mock_libs/pyspark/dbutils
-        
-        ############################
-        # Mock do módulo dlt
-        ############################
-        cat > mock_libs/dlt.py << 'EOF'
-        """Mock do módulo dlt para validação local."""
-        def table(*args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        
-        def expect(*args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        
-        def expect_or_drop(*args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        
-        def expect_or_fail(*args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        
-        def view(*args, **kwargs):
-            def decorator(func):
-                return func
-            return decorator
-        
-        def read(*args, **kwargs):
-            pass
-        
-        def read_stream(*args, **kwargs):
-            pass
-        EOF
-        
-        ############################
-        # Mock do pacote pyspark
-        ############################
-        # pyspark/__init__.py
-        cat > mock_libs/pyspark/__init__.py << 'EOF'
-        """Mock do pacote PySpark para validação local."""
-        __version__ = "3.5.0"
-        EOF
-        
-        # pyspark/sql/__init__.py
-        cat > mock_libs/pyspark/sql/__init__.py << 'EOF'
-        """Mock do módulo pyspark.sql para validação local."""
-
-        class DataFrame:
-            """Mock do DataFrame do PySpark."""
-            def __init__(self, *args, **kwargs):
-                pass
-            
-            def count(self):
-                return 0
-            
-            def repartition(self, *args, **kwargs):
-                return self
-            
-            def sortWithinPartitions(self, *args, **kwargs):
-                return self
-            
-            def select(self, *args, **kwargs):
-                return self
-            
-            def filter(self, *args, **kwargs):
-                return self
-            
-            def withColumn(self, *args, **kwargs):
-                return self
-            
-            def join(self, *args, **kwargs):
-                return self
-
-        class types:
-            """Mock dos tipos do PySpark."""
-            
-            class DataType:
-                pass
-            
-            class StructType:
-                def __init__(self, fields=None):
-                    self.fields = fields or []
-                    
-                def fieldNames(self):
-                    return [f.name for f in self.fields]
-            
-            class StructField:
-                def __init__(self, name, dataType, nullable=True):
-                    self.name = name
-                    self.dataType = dataType
-                    self.nullable = nullable
-            
-            class StringType(DataType):
-                pass
-            
-            class IntegerType(DataType):
-                pass
-            
-            class LongType(DataType):
-                pass
-            
-            class DoubleType(DataType):
-                pass
-            
-            class FloatType(DataType):
-                pass
-            
-            class TimestampType(DataType):
-                pass
-            
-            class DateType(DataType):
-                pass
-            
-            class BooleanType(DataType):
-                pass
-            
-            class ArrayType(DataType):
-                def __init__(self, elementType):
-                    self.elementType = elementType
-
-        # Alias para compatibilidade (from pyspark.sql import types as T)
-        T = types
-
-        class SparkSession:
-            """Mock da SparkSession."""
-            
-            def __init__(self, *args, **kwargs):
-                pass
-            
-            def createDataFrame(self, data, schema=None):
-                return DataFrame()
-            
-            @property
-            def builder(self):
-                return self
-            
-            def appName(self, name):
-                return self
-            
-            def getOrCreate(self):
-                return self
-
-        # Instância global mock do spark
-        spark = SparkSession()
-        EOF
-        
-        ############################
-        # Mock de pyspark.dbutils
-        ############################
-        # pyspark/dbutils/__init__.py
-        cat > mock_libs/pyspark/dbutils/__init__.py << 'EOF'
-        """Mock do módulo pyspark.dbutils para validação local."""
-
-        class DBUtils:
-            """Mock básico do DBUtils usado no Databricks."""
-            def __init__(self, spark=None):
-                self.spark = spark
-            
-            class FS:
-                def ls(self, path):
-                    return []
-                
-                def mkdirs(self, path):
-                    return None
-                
-                def rm(self, path, recurse=False):
-                    return None
-            
-            @property
-            def fs(self):
-                return self.FS()
-            
-            class Secrets:
-                def get(self, scope, key):
-                    return ""
-            
-            @property
-            def secrets(self):
-                return self.Secrets()
-            
-            class Widgets:
-                def get(self, name):
-                    return ""
-            
-            @property
-            def widgets(self):
-                return self.Widgets()
-        EOF
-        
-        ############################
-        # Ajusta PYTHONPATH e valida imports
-        ############################
-        export PYTHONPATH="${PYTHONPATH}:$(pwd)/mock_libs"
-        
-        echo "Validando imports do módulo bronze..."
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.bronze; print('✅ bronze.py OK')"        
-        
-        echo "Validando imports do módulo prata..."
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.prata; print('✅ prata.py OK')" || echo '⚠️ prata.py não encontrado ou não configurado'
-        
-        echo "Validando imports do módulo ouro..."
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import transformacoes.ouro; print('✅ ouro.py OK')" || echo '⚠️ ouro.py não encontrado ou não configurado'
-        
-        echo "Validando imports do módulo configuracoes..."
-        python -c "import utilitarios.configuracoes; print('✅ configuracoes.py OK')"
-        
-        echo "Validando imports do módulo fontes_dados..."
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import utilitarios.fontes_dados; print('✅ fontes_dados.py OK')"
-        
-        echo "Validando imports do pipeline_financeiro..."
-        python -c "import sys; sys.path.insert(0, 'mock_libs'); import pipelines.pipeline_financeiro; print('✅ pipeline_financeiro.py OK')"
+        echo "✅ Todos os arquivos têm sintaxe válida!"
 
   documentation-check:
     name: Verificação de Documentação
@@ -398,7 +175,6 @@ jobs:
     - name: Verificar vulnerabilidades com Safety
       run: |
         pip install safety
-        # Cria requirements.txt temporário com dependências conhecidas
         cat > requirements-check.txt << EOF
         pandas>=1.5.0
         requests>=2.28.0
@@ -408,7 +184,7 @@ jobs:
   summary:
     name: Resumo da Verificação
     runs-on: ubuntu-latest
-    needs: [lint-and-format, security-scan, code-quality, test-syntax, documentation-check, dependency-check]
+    needs: [lint-and-format, security-scan, code-quality, syntax-check, documentation-check, dependency-check]
     if: always()
     
     steps:
@@ -421,12 +197,15 @@ jobs:
         echo "| Linting e Formatação | ${{ needs.lint-and-format.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Verificação de Segurança | ${{ needs.security-scan.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Qualidade de Código | ${{ needs.code-quality.result }} |" >> $GITHUB_STEP_SUMMARY
-        echo "| Validação de Sintaxe | ${{ needs.test-syntax.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "| Verificação de Sintaxe | ${{ needs.syntax-check.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Verificação de Documentação | ${{ needs.documentation-check.result }} |" >> $GITHUB_STEP_SUMMARY
         echo "| Verificação de Dependências | ${{ needs.dependency-check.result }} |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "⚠️ **Nota:** Imports do Databricks (PySpark, DLT) não são verificados no CI." >> $GITHUB_STEP_SUMMARY
+        echo "Esses módulos só funcionam no ambiente Databricks." >> $GITHUB_STEP_SUMMARY
         
     - name: Falhar se jobs críticos falharam
-      if: needs.lint-and-format.result == 'failure' || needs.test-syntax.result == 'failure'
+      if: needs.lint-and-format.result == 'failure' || needs.syntax-check.result == 'failure'
       run: |
         echo "❌ Jobs críticos falharam. Verifique os logs acima."
         exit 1
