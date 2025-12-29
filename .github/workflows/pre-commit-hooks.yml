@@ -1,0 +1,29 @@
+# .github/workflows/pre-commit-hooks.yml
+name: Pre-commit Hooks
+
+on:
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  pre-commit:
+    name: Executar Pre-commit Hooks
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Instalar pre-commit
+      run: |
+        pip install pre-commit
+        
+    - name: Executar pre-commit em todos os arquivos
+      run: |
+        pre-commit run --all-files
+      continue-on-error: true

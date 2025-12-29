@@ -1,0 +1,111 @@
+# .github/workflows/code-coverage.yml
+name: Cobertura de Código
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main, develop ]
+
+jobs:
+  coverage:
+    name: Análise de Cobertura
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout do código
+      uses: actions/checkout@v4
+      
+    - name: Configurar Python 3.10
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+        
+    - name: Instalar dependências
+      run: |
+        pip install pytest pytest-cov coverage
+        pip install pandas requests
+        
+    - name: Criar testes básicos de importação
+      run: |
+        mkdir -p tests
+        
+        cat > tests/test_imports.py << 'EOF'
+        """Testes básicos de importação dos módulos."""
+        import sys
+        from pathlib import Path
+        
+        # Adiciona o diretório raiz ao path
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        
+        def test_import_configuracoes():
+            """Testa importação do módulo de configurações."""
+            from utilitarios import configuracoes
+            assert hasattr(configuracoes, 'ESQUEMAS')
+            assert hasattr(configuracoes, 'PROPRIEDADES_TABELAS')
+            assert hasattr(configuracoes, 'DEFINICAO_TABELAS')
+        
+        def test_configuracoes_esquemas():
+            """Testa estrutura de esquemas."""
+            from utilitarios.configuracoes import ESQUEMAS
+            assert 'bronze' in ESQUEMAS
+            assert 'prata' in ESQUEMAS
+            assert 'ouro' in ESQUEMAS
+        
+        def test_configuracoes_tabelas():
+            """Testa definições de tabelas."""
+            from utilitarios.configuracoes import DEFINICAO_TABELAS
+            assert 'bronze' in DEFINICAO_TABELAS
+            assert 'prata' in DEFINICAO_TABELAS
+            assert 'ouro' in DEFINICAO_TABELAS
+            
+            # Verifica tabelas bronze
+            assert 'cotacoes_b3' in DEFINICAO_TABELAS['bronze']
+            assert 'series_bacen' in DEFINICAO_TABELAS['bronze']
+            assert 'indices_futuros' in DEFINICAO_TABELAS['bronze']
+        
+        def test_obter_nome_tabela():
+            """Testa função de obtenção de nome de tabela."""
+            from utilitarios.configuracoes import obter_nome_tabela
+            
+            nome = obter_nome_tabela('bronze', 'cotacoes_b3')
+            assert 'aafn_ing.cotacoes_b3' == nome
+            
+            nome = obter_nome_tabela('prata', 'tb_mkt_eqt_day')
+            assert 'aafn_tgt.tb_mkt_eqt_day' == nome
+        
+        def test_indices_futuros_padrao():
+            """Testa configuração de índices futuros."""
+            from utilitarios.configuracoes import INDICES_FUTUROS_PADRAO
+            
+            assert isinstance(INDICES_FUTUROS_PADRAO, dict)
+            assert len(INDICES_FUTUROS_PADRAO) > 0
+            
+            # Verifica estrutura de um índice
+            for indice, config in INDICES_FUTUROS_PADRAO.items():
+                assert 'ticker' in config
+                assert 'regiao' in config
+                assert 'categoria' in config
+        EOF
+        
+    - name: Executar testes com cobertura
+      run: |
+        pytest tests/ -v --cov=utilitarios --cov=transformacoes --cov=pipelines \
+          --cov-report=term-missing \
+          --cov-report=html \
+          --cov-report=xml
+      continue-on-error: true
+      
+    - name: Upload do relatório de cobertura
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-report
+        path: htmlcov/
+        
+    - name: Comentar PR com cobertura
+      if: github.event_name == 'pull_request'
+      uses: py-cov-action/python-coverage-comment-action@v3
+      with:
+        GITHUB_TOKEN: ${{ github.token }}
+      continue-on-error: true
